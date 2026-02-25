@@ -2,7 +2,7 @@
   "name": "positron-julia",
   "displayName": "Julia for Positron",
   "description": "Julia language support for Positron IDE",
-  "version": "0.1.4",
+  "version": "0.1.15",
   "publisher": "ntluong95",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,
@@ -43,6 +43,52 @@
           "julia"
         ],
         "configuration": "./language-configuration/julia-language-configuration.json"
+      },
+      {
+        "id": "julia-markdown",
+        "extensions": [
+          ".jmd"
+        ],
+        "aliases": [
+          "Julia Markdown",
+          "julia markdown"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "julia",
+        "scopeName": "source.julia",
+        "path": "./syntaxes/julia_vscode.json"
+      },
+      {
+        "language": "julia-markdown",
+        "scopeName": "text.html.markdown.julia",
+        "path": "./syntaxes/juliamarkdown.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.julia": "julia"
+        }
+      },
+      {
+        "scopeName": "markdown.julia.codeblock",
+        "path": "./syntaxes/juliacodeblock.json",
+        "injectTo": [
+          "text.html.markdown",
+          "text.html.markdown.julia"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.julia": "julia"
+        }
+      },
+      {
+        "scopeName": "source.docstring.julia",
+        "path": "./syntaxes/juliadocstring.json",
+        "injectTo": [
+          "source.julia"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.julia": "julia"
+        }
       }
     ],
     "commands": [
@@ -64,6 +110,26 @@
           "type": "string",
           "default": "",
           "description": "Path to the Julia executable"
+        },
+        "julia.lint.missingrefs": {
+          "type": "string",
+          "enum": [
+            "all",
+            "id",
+            "none"
+          ],
+          "default": "all",
+          "description": "Controls missing-reference diagnostics from the Julia Language Server."
+        },
+        "positron.julia.languageServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Julia Language Server diagnostics and completions."
+        },
+        "positron.julia.languageServer.environmentPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to a Julia project environment for Language Server analysis."
         }
       }
     },

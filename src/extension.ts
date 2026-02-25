@@ -40,20 +40,40 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Also check if any Julia files are already open (e.g., after reload)
 	context.subscriptions.push(
 		vscode.workspace.onDidOpenTextDocument(async (document) => {
-			if (document.languageId === 'julia' && !languageClient) {
-				await startLanguageServer(context).catch(error => {
+			if (document.languageId !== 'julia') {
+				return;
+			}
+
+			if (!languageClient) {
+				await startLanguageServer(context, undefined, document.uri.fsPath).catch(error => {
 					LOGGER.warn(`Language server not started: ${error.message}`);
 				});
+				return;
 			}
+
+			await languageClient.refreshEnvironmentForFile(document.uri.fsPath).catch(error => {
+				LOGGER.warn(`Language server environment refresh failed: ${error.message}`);
+			});
+		})
+	);
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+			const document = editor?.document;
+			if (!document || document.languageId !== 'julia' || !languageClient) {
+				return;
+			}
+			await languageClient.refreshEnvironmentForFile(document.uri.fsPath).catch(error => {
+				LOGGER.warn(`Language server environment refresh failed: ${error.message}`);
+			});
 		})
 	);
 
 	// Check if Julia files are already open (handles reload case)
-	const hasOpenJuliaFiles = vscode.workspace.textDocuments.some(
+	const openJuliaDocument = vscode.workspace.textDocuments.find(
 		doc => doc.languageId === 'julia'
 	);
-	if (hasOpenJuliaFiles) {
-		startLanguageServer(context).catch(error => {
+	if (openJuliaDocument) {
+		startLanguageServer(context, undefined, openJuliaDocument.uri.fsPath).catch(error => {
 			LOGGER.warn(`Language server not started: ${error.message}`);
 		});
 	}
@@ -70,7 +90,8 @@ export async function activate(context: vscode.ExtensionContext) {
  */
 async function startLanguageServer(
 	context: vscode.ExtensionContext,
-	installation?: any
+	installation?: any,
+	preferredFilePath?: string
 ): Promise<void> {
 	// Check if language server is enabled
 	const config = vscode.workspace.getConfiguration('positron.julia');
@@ -106,7 +127,7 @@ async function startLanguageServer(
 	context.subscriptions.push(languageClient);
 
 	try {
-		await languageClient.start(installation);
+		await languageClient.start(installation, preferredFilePath);
 		LOGGER.info('Julia Language Server started successfully');
 	} catch (error) {
 		LOGGER.error(`Failed to start language server: ${error}`);
@@ -143,7 +164,9 @@ export async function ensureLanguageServerForVersion(
 	// If no LS is running, start it with this version
 	if (!languageClient || !languageClient.isRunning()) {
 		LOGGER.info(`Language Server not running, starting for Julia ${installation.version}`);
-		await startLanguageServer(context, installation);
+		const activeDocument = vscode.window.activeTextEditor?.document;
+		const preferredFilePath = activeDocument?.languageId === 'julia' ? activeDocument.uri.fsPath : undefined;
+		await startLanguageServer(context, installation, preferredFilePath);
 		return;
 	}
 
@@ -155,8 +178,14 @@ export async function ensureLanguageServerForVersion(
 		LOGGER.info(`Restarting Language Server: switching from Julia ${currentVersion} to ${installation.version}`);
 		await languageClient.stop();
 		languageClient = undefined;
-		await startLanguageServer(context, installation);
+		const activeDocument = vscode.window.activeTextEditor?.document;
+		const preferredFilePath = activeDocument?.languageId === 'julia' ? activeDocument.uri.fsPath : undefined;
+		await startLanguageServer(context, installation, preferredFilePath);
 	} else {
 		LOGGER.debug(`Language Server already running with Julia ${currentVersion}`);
+		const activeDocument = vscode.window.activeTextEditor?.document;
+		if (activeDocument?.languageId === 'julia') {
+			await languageClient.refreshEnvironmentForFile(activeDocument.uri.fsPath);
+		}
 	}
 }

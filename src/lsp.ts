@@ -24,11 +24,13 @@ export class JuliaLanguageClient implements vscode.Disposable {
 
 	private _client: LanguageClient | undefined;
 	private _installation: JuliaInstallation | undefined;
+	private _environmentPath: string | undefined;
 	private _extensionPath: string;
 	private _outputChannel: vscode.OutputChannel;
 	private _restartCount: number = 0;
 	private _maxRestarts: number = 3;
 	private _restartResetTimeout: NodeJS.Timeout | undefined;
+	private _isStopping: boolean = false;
 
 	constructor(extensionPath: string) {
 		this._extensionPath = extensionPath;
@@ -46,6 +48,74 @@ export class JuliaLanguageClient implements vscode.Disposable {
 		const versionMatch = installation.version.match(/^(\d+\.\d+)/);
 		const minorVersion = versionMatch ? versionMatch[1] : '1.x';
 		return path.join(this._extensionPath, 'lsdepot', `v${minorVersion}`);
+	}
+
+	private findNearestProjectDir(startPath: string): string | undefined {
+		let dir = startPath;
+		try {
+			const stat = fs.statSync(startPath);
+			if (!stat.isDirectory()) {
+				dir = path.dirname(startPath);
+			}
+		} catch {
+			return undefined;
+		}
+
+		while (true) {
+			if (
+				fs.existsSync(path.join(dir, 'Project.toml')) ||
+				fs.existsSync(path.join(dir, 'JuliaProject.toml'))
+			) {
+				return dir;
+			}
+			const parent = path.dirname(dir);
+			if (parent === dir) {
+				return undefined;
+			}
+			dir = parent;
+		}
+	}
+
+	private resolveEnvironmentPath(
+		installation: JuliaInstallation,
+		preferredFilePath?: string
+	): { path: string; reason: string } {
+		const config = vscode.workspace.getConfiguration('positron.julia');
+		const configuredPath = config.get<string>('languageServer.environmentPath', '').trim();
+
+		if (configuredPath) {
+			const basePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+			const resolvedPath = path.isAbsolute(configuredPath)
+				? configuredPath
+				: path.resolve(basePath, configuredPath);
+			if (fs.existsSync(resolvedPath)) {
+				return { path: resolvedPath, reason: 'user setting (positron.julia.languageServer.environmentPath)' };
+			}
+			LOGGER.warn(`Configured Language Server environment does not exist: ${resolvedPath}`);
+		}
+
+		const candidateFile = preferredFilePath
+			?? vscode.window.activeTextEditor?.document.uri.fsPath;
+		if (candidateFile) {
+			const nearest = this.findNearestProjectDir(candidateFile);
+			if (nearest) {
+				return { path: nearest, reason: `nearest project for ${candidateFile}` };
+			}
+		}
+
+		const minorVersion = installation.version.match(/^(\d+\.\d+)/)?.[1];
+		const home = process.env.HOME || process.env.USERPROFILE || '';
+		if (minorVersion && home) {
+			const defaultEnv = path.join(home, '.julia', 'environments', `v${minorVersion}`);
+			if (fs.existsSync(path.join(defaultEnv, 'Project.toml'))) {
+				return { path: defaultEnv, reason: 'default Julia environment' };
+			}
+		}
+
+		return {
+			path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
+			reason: 'workspace root fallback',
+		};
 	}
 
 	/**
@@ -133,7 +203,7 @@ export class JuliaLanguageClient implements vscode.Disposable {
 	 * Starts the language server with the given Julia installation.
 	 * Automatically installs LanguageServer.jl if not present.
 	 */
-	async start(installation: JuliaInstallation): Promise<void> {
+	async start(installation: JuliaInstallation, preferredFilePath?: string): Promise<void> {
 		if (this._client) {
 			LOGGER.info('Language server already running');
 			return;
@@ -164,8 +234,11 @@ export class JuliaLanguageClient implements vscode.Disposable {
 			'main.jl'
 		);
 
-		// Get the workspace folder for the environment path
-		const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+		// Resolve the best Julia environment for static analysis.
+		const resolvedEnvironment = this.resolveEnvironmentPath(installation, preferredFilePath);
+		const workspaceFolder = resolvedEnvironment.path;
+		this._environmentPath = workspaceFolder;
+		LOGGER.info(`Julia Language Server environment: ${workspaceFolder} (${resolvedEnvironment.reason})`);
 
 		// Language server depot path - version-specific to support multiple Julia versions
 		const lsDepot = this.getLsDepotPath(installation);
@@ -179,6 +252,34 @@ export class JuliaLanguageClient implements vscode.Disposable {
 		);
 		const depotPath = `${lsDepot}${path.delimiter}${userDepot}`;
 
+		// Determine the user's PRIMARY depot directory.
+		// This is the depot where user-installed packages (DataFrames, Plots, etc.) reside.
+		// It MUST be passed to LanguageServer.jl's runserver() so SymbolServer can
+		// find and index user packages.
+		// If JULIA_DEPOT_PATH has multiple entries (colon-separated), take the first.
+		const userPrimaryDepot = process.env.JULIA_DEPOT_PATH
+			? process.env.JULIA_DEPOT_PATH.split(path.delimiter)[0]
+			: path.join(process.env.HOME || process.env.USERPROFILE || '', '.julia');
+
+		const juliaLoadPath = ['@', '@v#.#', '@stdlib'].join(path.delimiter);
+		LOGGER.info(`Julia Language Server load path: ${juliaLoadPath}`);
+		LOGGER.info(`Julia Language Server depot path: ${depotPath}`);
+		LOGGER.info(`Julia Language Server user primary depot: ${userPrimaryDepot}`);
+		const serverEnv: NodeJS.ProcessEnv = {
+			...process.env,
+			// Prepend LS depot to user depot path
+			// This ensures access to Julia's stdlib, registries, and symbol caches
+			JULIA_DEPOT_PATH: depotPath,
+			JULIA_LOAD_PATH: juliaLoadPath,
+			JULIA_LANGUAGESERVER: '1',
+			POSITRON_JULIA_LS: '1',
+			// Tell main.jl which depot has user-installed packages
+			POSITRON_JULIA_USER_DEPOT: userPrimaryDepot,
+		};
+		if (process.platform === 'win32' && serverEnv.SSH_KNOWN_HOSTS_FILES === undefined) {
+			serverEnv.SSH_KNOWN_HOSTS_FILES = '';
+		}
+
 		const serverOptions: ServerOptions = {
 			command: installation.binpath,
 			args: [
@@ -189,15 +290,7 @@ export class JuliaLanguageClient implements vscode.Disposable {
 				workspaceFolder
 			],
 			options: {
-				env: {
-					...process.env,
-					// Prepend LS depot to user depot path
-					// This ensures access to Julia's stdlib, registries, and symbol caches
-					JULIA_DEPOT_PATH: depotPath,
-					JULIA_LOAD_PATH: '@:@v#.#:@stdlib',  // Standard load path with stdlib
-					JULIA_LANGUAGESERVER: '1',
-					POSITRON_JULIA_LS: '1',
-				}
+				env: serverEnv
 			},
 			transport: TransportKind.stdio
 		};
@@ -246,6 +339,10 @@ export class JuliaLanguageClient implements vscode.Disposable {
 		// Handle unexpected stops - auto-restart with limits
 		this._client.onDidChangeState((event) => {
 			if (event.newState === 1) { // State.Stopped
+				if (this._isStopping) {
+					LOGGER.debug('Julia Language Server stopped by request');
+					return;
+				}
 				LOGGER.warn('Julia Language Server stopped unexpectedly');
 				// Clear the client reference
 				this._client = undefined;
@@ -299,8 +396,14 @@ export class JuliaLanguageClient implements vscode.Disposable {
 	async stop(): Promise<void> {
 		if (this._client) {
 			LOGGER.info('Stopping Julia Language Server');
-			await this._client.stop();
-			this._client = undefined;
+			this._isStopping = true;
+			try {
+				await this._client.stop();
+			} finally {
+				this._isStopping = false;
+				this._client = undefined;
+				this._environmentPath = undefined;
+			}
 		}
 	}
 
@@ -312,6 +415,29 @@ export class JuliaLanguageClient implements vscode.Disposable {
 			await this.stop();
 			await this.start(this._installation);
 		}
+	}
+
+	/**
+	 * Ensures the language server uses the best environment for a file path.
+	 * Restarts the server if the target environment changed.
+	 */
+	async refreshEnvironmentForFile(filePath: string): Promise<void> {
+		if (!this._installation || !this.isRunning()) {
+			return;
+		}
+
+		const resolved = this.resolveEnvironmentPath(this._installation, filePath);
+		if (resolved.path === this._environmentPath) {
+			return;
+		}
+
+		LOGGER.info(`Switching Julia Language Server environment to ${resolved.path} (${resolved.reason})`);
+		await this.stop();
+		await this.start(this._installation, filePath);
+	}
+
+	getEnvironmentPath(): string | undefined {
+		return this._environmentPath;
 	}
 
 	/**
