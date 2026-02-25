@@ -106,8 +106,42 @@ function call_interpreter_method(method::String, params::Vector)::Any
             return evaluate_expression(expr_str)
         end
         error("Missing expression parameter")
+    elseif method == "complete_request"
+        if length(params) >= 2
+            code = string(params[1])
+            cursor_pos = Int(params[2])
+            return handle_complete_request(code, cursor_pos)
+        end
+        error("Missing code or cursor_pos parameter")
     else
         error("Unknown method: $method")
+    end
+end
+
+"""
+Handle a completion request using Julia's REPL completions.
+
+Returns a dict matching Jupyter complete_reply format:
+  matches, cursor_start, cursor_end, status
+"""
+function handle_complete_request(code::String, cursor_pos::Int)::Dict
+    try
+        completions, range, should_complete = REPL.REPLCompletions.completions(code, cursor_pos)
+        matches = [REPL.REPLCompletions.completion_text(c) for c in completions]
+        return Dict(
+            "matches" => matches,
+            "cursor_start" => first(range) - 1,  # Convert 1-indexed Julia to 0-indexed
+            "cursor_end" => cursor_pos,
+            "status" => "ok",
+        )
+    catch e
+        kernel_log_error("Completion error: $(sprint(showerror, e))")
+        return Dict(
+            "matches" => String[],
+            "cursor_start" => 0,
+            "cursor_end" => cursor_pos,
+            "status" => "error",
+        )
     end
 end
 
@@ -117,7 +151,7 @@ Get variables for UI display.
 function get_variables_for_ui()::Dict
     variables = Dict{String,Any}()
 
-    for name in names(Main; all = false)
+    for name in names(Main; all=false)
         name_str = string(name)
 
         # Skip internal names
@@ -133,7 +167,7 @@ function get_variables_for_ui()::Dict
             if !(val isa Module)
                 variables[name_str] = Dict(
                     "type" => string(typeof(val)),
-                    "value" => repr(val; context = :limit => true),
+                    "value" => repr(val; context=:limit => true),
                 )
             end
         catch
@@ -152,7 +186,7 @@ function evaluate_expression(expr_str::String)::Any
         result = Core.eval(Main, expr)
         return Dict(
             "success" => true,
-            "result" => repr(result; context = :limit => true),
+            "result" => repr(result; context=:limit => true),
             "type" => string(typeof(result)),
         )
     catch e

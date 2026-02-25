@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.2"
+julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "c3a9071c1d467fac1f1aa3243e9f5e57ccbfa7cb"
+project_hash = "928cbbc8c9dd433c8a8df3a28a65d92483340dc3"
 
 [[deps.ArgParse]]
 deps = ["Logging", "TextWrap"]
@@ -284,7 +284,7 @@ version = "1.11.0"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2025.5.20"
+version = "2025.11.4"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
@@ -320,7 +320,7 @@ version = "2.8.3"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.12.0"
+version = "1.12.1"
 weakdeps = ["REPL"]
 
     [deps.Pkg.extensions]
@@ -333,7 +333,7 @@ uuid = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 version = "1.4.3"
 
 [[deps.Positron]]
-deps = ["Base64", "Coverage", "DataFrames", "Dates", "IJulia", "JSON3", "Logging", "Markdown", "PrecompileTools", "Statistics", "StructTypes", "UUIDs"]
+deps = ["Base64", "Coverage", "DataFrames", "Dates", "IJulia", "JSON3", "Logging", "Markdown", "PrecompileTools", "REPL", "Statistics", "StructTypes", "UUIDs"]
 path = "."
 uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 version = "0.1.0"

@@ -236,6 +236,13 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		throw new Error('Debugging is not yet supported for Julia sessions');
 	}
 
+	callMethod(method: string, ...args: any[]): Thenable<any> {
+		if (!this._kernel) {
+			throw new Error('Session not started');
+		}
+		return this._kernel.callMethod(method, ...args);
+	}
+
 	async setWorkingDirectory(dir: string): Promise<void> {
 		if (!this._kernel) {
 			throw new Error('Session not started');

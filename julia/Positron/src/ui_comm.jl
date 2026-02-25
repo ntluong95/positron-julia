@@ -10,8 +10,8 @@
 # External references
 # From plot_comm.jl: PlotRenderSettings
 
-# Param is represented as Any (Dict{String, Any})
-const Param = Dict{String,Any}
+# Param is represented as Any (mixed types from JSON-RPC calls)
+const Param = Any
 
 # CallMethodResult is represented as Any (Dict{String, Any})
 const CallMethodResult = Dict{String,Any}

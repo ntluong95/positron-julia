@@ -24,6 +24,7 @@ using Base64
 using Markdown
 using Statistics  # For mean, std, quantile in Data Explorer
 using DataFrames
+using REPL  # For REPL.REPLCompletions in runtime completions
 using PrecompileTools: @setup_workload, @compile_workload
 
 # Core comm infrastructure
@@ -67,10 +68,10 @@ export PositronComm, create_comm, on_msg!, on_close!, send_result, send_event, s
 @setup_workload begin
     # Create test data during precompile setup
     test_df = DataFrame(
-        int_col = [1, 2, 3, 4, 5],
-        float_col = [1.1, 2.2, 3.3, 4.4, 5.5],
-        string_col = ["a", "b", "c", "d", "e"],
-        bool_col = [true, false, true, false, true],
+        int_col=[1, 2, 3, 4, 5],
+        float_col=[1.1, 2.2, 3.3, 4.4, 5.5],
+        string_col=["a", "b", "c", "d", "e"],
+        bool_col=[true, false, true, false, true],
     )
 
     @compile_workload begin
