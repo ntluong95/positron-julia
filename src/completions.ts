@@ -6,11 +6,9 @@
 /**
  * Runtime completion provider for Julia.
  *
- * NOTE: This provider is currently DISABLED because Silent execution mode doesn't
- * return results, and Transient mode pollutes the console. See TODO-LATER.md.
- *
- * When proper Jupyter complete_request support is added to positron-supervisor,
- * this code can be updated to use that API instead.
+ * Uses the Jupyter `complete_request` message via `callMethod` on the active
+ * Julia session.  This is fully silent (no console output, no history entry)
+ * and is the standard Jupyter protocol mechanism for completions.
  */
 
 import * as vscode from 'vscode';
@@ -23,8 +21,6 @@ import { LOGGER } from './extension';
  */
 export class JuliaRuntimeCompletionProvider implements vscode.CompletionItemProvider, vscode.Disposable {
 
-	private _pendingRequest: vscode.CancellationTokenSource | undefined;
-
 	async provideCompletionItems(
 		document: vscode.TextDocument,
 		position: vscode.Position,
@@ -32,101 +28,75 @@ export class JuliaRuntimeCompletionProvider implements vscode.CompletionItemProv
 		_context: vscode.CompletionContext
 	): Promise<vscode.CompletionItem[] | undefined> {
 
-		// Only provide completions for Julia documents
 		if (document.languageId !== 'julia') {
 			return undefined;
 		}
 
-		// Check if there's an active Julia session
+		// Find an active Julia session that supports callMethod
 		const sessions = await positron.runtime.getActiveSessions();
-		const juliaSession = sessions.find(s => s.runtimeMetadata.languageId === 'julia');
+		const juliaSession = sessions.find(
+			s => s.runtimeMetadata.languageId === 'julia' && typeof s.callMethod === 'function'
+		);
 		if (!juliaSession) {
 			return undefined;
 		}
 
-		// Get the text up to the cursor position
+		// Build the code string up to cursor position
 		const lineText = document.lineAt(position.line).text;
 		const textBeforeCursor = lineText.substring(0, position.character);
 
-		// Don't provide completions for empty input or just whitespace
 		if (!textBeforeCursor.trim()) {
 			return undefined;
 		}
 
-		// Cancel any pending request
-		if (this._pendingRequest) {
-			this._pendingRequest.cancel();
+		if (token.isCancellationRequested) {
+			return undefined;
 		}
-		this._pendingRequest = new vscode.CancellationTokenSource();
 
 		try {
-			return await this.getJuliaCompletions(textBeforeCursor, position.character, token);
-		} catch (error) {
-			LOGGER.debug(`Runtime completion error: ${error}`);
+			// Use Jupyter complete_request via callMethod — fully silent,
+			// does not pollute console or history.
+			const reply = await juliaSession.callMethod!(
+				'complete_request',
+				textBeforeCursor,
+				position.character
+			);
+
+			if (token.isCancellationRequested) {
+				return undefined;
+			}
+
+			// Jupyter complete_reply format:
+			//   { matches: string[], cursor_start: number, cursor_end: number,
+			//     metadata: object, status: 'ok' | 'error' }
+			const matches: string[] = reply?.matches ?? [];
+			if (matches.length === 0) {
+				return undefined;
+			}
+
+			// Determine the replacement range from cursor_start/cursor_end
+			const cursorStart: number = reply?.cursor_start ?? 0;
+			const cursorEnd: number = reply?.cursor_end ?? position.character;
+			const replaceRange = new vscode.Range(
+				position.line, cursorStart,
+				position.line, cursorEnd
+			);
+
+			return matches.map(text => {
+				const item = new vscode.CompletionItem(text, vscode.CompletionItemKind.Variable);
+				item.range = replaceRange;
+				item.sortText = ` ${text}`; // Space prefix sorts before LSP items
+				item.detail = '(runtime)';
+				return item;
+			});
+		} catch (err) {
+			LOGGER.debug(`Runtime completion error: ${err}`);
 			return undefined;
 		}
 	}
 
-	private async getJuliaCompletions(
-		code: string,
-		cursorPos: number,
-		token: vscode.CancellationToken
-	): Promise<vscode.CompletionItem[]> {
-
-		// Escape the code string for Julia
-		const escapedCode = code
-			.replace(/\\/g, '\\\\')
-			.replace(/"/g, '\\"')
-			.replace(/\n/g, '\\n');
-
-		// Build Julia code to get completions using REPLCompletions
-		const juliaCode = `let
-	import REPL.REPLCompletions
-	code = "${escapedCode}"
-	completions, range, should_complete = REPLCompletions.completions(code, ${cursorPos})
-	join([REPLCompletions.completion_text(c) for c in completions], "\\n")
-end`;
-
-		try {
-			// NOTE: Using Transient mode because Silent doesn't return results.
-			// This pollutes the console, which is why this provider is disabled.
-			const result = await positron.runtime.executeCode(
-				'julia',
-				juliaCode,
-				false,
-				true,
-				positron.RuntimeCodeExecutionMode.Transient,
-				positron.RuntimeErrorBehavior.Continue,
-				{ token }
-			);
-
-			const completionText = result['text/plain'] as string | undefined;
-			if (!completionText) {
-				return [];
-			}
-
-			// Parse the newline-separated completions (result is a quoted string)
-			const cleanText = completionText.replace(/^"|"$/g, '');
-			const completionStrings = cleanText.split('\\n').filter(s => s.length > 0);
-
-			return completionStrings.map(text => {
-				const item = new vscode.CompletionItem(text, vscode.CompletionItemKind.Variable);
-				item.sortText = ` ${text}`; // Space prefix sorts before letters
-				item.detail = '(runtime)';
-				item.preselect = true;
-				return item;
-			});
-		} catch (err) {
-			LOGGER.debug(`executeCode failed: ${err}`);
-			return [];
-		}
-	}
-
 	dispose(): void {
-		if (this._pendingRequest) {
-			this._pendingRequest.cancel();
-			this._pendingRequest = undefined;
-		}
+		// nothing to clean up
 	}
 }
 
@@ -142,7 +112,8 @@ export function registerCompletionProvider(context: vscode.ExtensionContext): vs
 			{ language: 'julia', scheme: 'untitled' },
 			{ language: 'julia', scheme: 'inmemory' },
 		],
-		provider
+		provider,
+		'.', // trigger on dot for field/module member completion
 	);
 
 	context.subscriptions.push(disposable);

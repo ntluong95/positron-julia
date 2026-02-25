@@ -31,10 +31,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Register commands
 	registerCommands(context, juliaRuntimeManager);
 
-	// NOTE: Runtime completion provider disabled - Silent execution mode doesn't return
-	// results, and Transient mode pollutes the console. Need proper silent execution
-	// support in positron-supervisor. See TODO-LATER.md.
-	// registerCompletionProvider(context);
+	// Register runtime completion provider (uses Jupyter complete_request via callMethod)
+	registerCompletionProvider(context);
 
 	// Start language server when a Julia file is opened
 	// Also check if any Julia files are already open (e.g., after reload)

@@ -2,7 +2,7 @@
   "name": "positron-julia",
   "displayName": "Julia for Positron",
   "description": "Julia language support for Positron IDE",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "publisher": "ntluong95",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,
@@ -20,8 +20,11 @@
   "main": "./out/extension.js",
   "icon": "icon.png",
   "activationEvents": [
+    "onLanguageRuntime:julia",
     "onLanguage:julia",
-    "onCommand:julia.createNewFile"
+    "onCommand:julia.createNewFile",
+    "onCommand:julia.selectInterpreter",
+    "onCommand:julia.sourceCurrentFile"
   ],
   "extensionDependencies": [
     "positron.positron-supervisor"
