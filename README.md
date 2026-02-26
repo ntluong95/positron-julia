@@ -3,7 +3,7 @@
 Julia language support for [Positron](https://github.com/posit-dev/positron). The project is a fork of a [PR](https://github.com/posit-dev/positron/pull/11108) made by @wesm
 
 <p align="center">
-  <img src="resources/branding/julia-icon.png" alt="Julia Logo" width="240">
+  <img src="resources/branding/julia-logo.png" alt="Julia Logo" width="240">
 </p>
 
 ## Features
