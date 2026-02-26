@@ -431,8 +431,29 @@ export class JuliaLanguageClient implements vscode.Disposable {
 			return;
 		}
 
+		// Don't switch away from a project environment to the default environment.
+		// The LSP was started with a specific project for a reason (an open .jl file).
+		// Only switch when moving TO a project environment (has Project.toml).
+		const targetHasProject = fs.existsSync(path.join(resolved.path, 'Project.toml')) ||
+			fs.existsSync(path.join(resolved.path, 'JuliaProject.toml'));
+		const currentHasProject = this._environmentPath &&
+			(fs.existsSync(path.join(this._environmentPath, 'Project.toml')) ||
+				fs.existsSync(path.join(this._environmentPath, 'JuliaProject.toml')));
+
+		if (currentHasProject && !targetHasProject) {
+			LOGGER.debug(`Keeping current project environment ${this._environmentPath} (not switching to ${resolved.reason})`);
+			return;
+		}
+
 		LOGGER.info(`Switching Julia Language Server environment to ${resolved.path} (${resolved.reason})`);
-		await this.stop();
+		try {
+			await this.stop();
+		} catch (err) {
+			LOGGER.warn(`Error stopping Language Server during environment switch: ${err}`);
+			// Force-clear the client so we can restart
+			this._client = undefined;
+			this._environmentPath = undefined;
+		}
 		await this.start(this._installation, filePath);
 	}
 

@@ -16,6 +16,7 @@ import { registerCompletionProvider } from './completions';
 export const LOGGER = vscode.window.createOutputChannel('Julia Language Pack', { log: true });
 
 let languageClient: JuliaLanguageClient | undefined;
+let languageServerStarting: Promise<void> | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
 	const onDidChangeLogLevel = (logLevel: vscode.LogLevel) => {
@@ -91,6 +92,11 @@ async function startLanguageServer(
 	installation?: any,
 	preferredFilePath?: string
 ): Promise<void> {
+	// If a start is already in progress, wait for it instead of starting another
+	if (languageServerStarting) {
+		return languageServerStarting;
+	}
+
 	// Check if language server is enabled
 	const config = vscode.workspace.getConfiguration('positron.julia');
 	if (!config.get<boolean>('languageServer.enabled', true)) {
@@ -104,6 +110,19 @@ async function startLanguageServer(
 		return;
 	}
 
+	languageServerStarting = doStartLanguageServer(context, installation, preferredFilePath);
+	try {
+		await languageServerStarting;
+	} finally {
+		languageServerStarting = undefined;
+	}
+}
+
+async function doStartLanguageServer(
+	context: vscode.ExtensionContext,
+	installation?: any,
+	preferredFilePath?: string
+): Promise<void> {
 	// If no installation provided, find the first available one
 	if (!installation) {
 		LOGGER.debug('No installation provided, discovering Julia installations...');
@@ -159,6 +178,11 @@ export async function ensureLanguageServerForVersion(
 	installation: any,
 	context: vscode.ExtensionContext
 ): Promise<void> {
+	// If a start is already in progress, wait for it
+	if (languageServerStarting) {
+		await languageServerStarting;
+	}
+
 	// If no LS is running, start it with this version
 	if (!languageClient || !languageClient.isRunning()) {
 		LOGGER.info(`Language Server not running, starting for Julia ${installation.version}`);
