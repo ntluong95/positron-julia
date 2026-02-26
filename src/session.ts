@@ -245,14 +245,17 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 
 	async setWorkingDirectory(dir: string): Promise<void> {
 		if (!this._kernel) {
-			throw new Error('Session not started');
+			throw new Error(`Cannot set working directory to ${dir}; kernel not started`);
 		}
 		// Escape the directory path for Julia
-		const escapedDir = dir.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+		const escapedDir = dir
+			.replace(/\\/g, '\\\\')
+			.replace(/"/g, '\\"')
+			.replace(/\$/g, '\\$');
 		this._kernel.execute(
 			`cd("${escapedDir}")`,
 			'setwd-' + Date.now(),
-			positron.RuntimeCodeExecutionMode.Silent,
+			positron.RuntimeCodeExecutionMode.Interactive,
 			positron.RuntimeErrorBehavior.Continue
 		);
 	}

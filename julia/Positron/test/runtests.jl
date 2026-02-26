@@ -35,6 +35,10 @@ include("test_helpers.jl")
         include("test_kernel.jl")
     end
 
+    @testset "UI Service" begin
+        include("test_ui.jl")
+    end
+
     @testset "Variables and Inspection" begin
         include("test_variables.jl")
         include("test_inspectors.jl")
