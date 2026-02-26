@@ -130,6 +130,11 @@
           "type": "string",
           "default": "",
           "description": "Optional path to a Julia project environment for Language Server analysis."
+        },
+        "positron.julia.semanticHighlighting.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable semantic highlighting for Julia files."
         }
       }
     },
