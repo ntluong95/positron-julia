@@ -2,7 +2,7 @@
   "name": "positron-julia",
   "displayName": "Julia for Positron",
   "description": "Julia language support for Positron IDE",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "ntluong95",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,
@@ -18,7 +18,7 @@
     "Data Science"
   ],
   "main": "./out/extension.js",
-  "icon": "icon.png",
+  "icon": "./resources/branding/julia-logo.png",
   "activationEvents": [
     "onLanguageRuntime:julia",
     "onLanguage:julia",
