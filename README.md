@@ -3,7 +3,7 @@
 Julia language support for [Positron](https://github.com/posit-dev/positron). The project is a fork of a [PR](https://github.com/posit-dev/positron/pull/11108) made by @wesm
 
 <p align="center">
-  <img src="resources/branding/julia-icon.svg" alt="Julia Logo" width="240">
+  <img src="resources/branding/julia-icon.png" alt="Julia Logo" width="240">
 </p>
 
 ## Features
@@ -32,12 +32,12 @@ On first launch, the extension automatically installs required Julia packages (`
 
 ## Extension Settings
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `positron.julia.executablePath` | `""` | Path to a specific Julia executable |
-| `positron.julia.languageServer.enabled` | `true` | Enable/disable the Julia Language Server |
-| `positron.julia.languageServer.environmentPath` | `""` | Path to a Julia project environment for the Language Server |
-| `julia.lint.missingrefs` | `"all"` | Control missing-reference diagnostics (`all`, `id`, `none`) |
+| Setting                                         | Default | Description                                                 |
+| ----------------------------------------------- | ------- | ----------------------------------------------------------- |
+| `positron.julia.executablePath`                 | `""`    | Path to a specific Julia executable                         |
+| `positron.julia.languageServer.enabled`         | `true`  | Enable/disable the Julia Language Server                    |
+| `positron.julia.languageServer.environmentPath` | `""`    | Path to a Julia project environment for the Language Server |
+| `julia.lint.missingrefs`                        | `"all"` | Control missing-reference diagnostics (`all`, `id`, `none`) |
 
 ## Building from Source
 
