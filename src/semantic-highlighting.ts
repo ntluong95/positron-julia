@@ -209,13 +209,20 @@ class TokenCollector {
 }
 
 export class JuliaSemanticTokensProvider implements vscode.DocumentSemanticTokensProvider, vscode.Disposable {
+	private readonly _onDidChangeSemanticTokens = new vscode.EventEmitter<void>();
+	readonly onDidChangeSemanticTokens = this._onDidChangeSemanticTokens.event;
+
+	refresh(): void {
+		this._onDidChangeSemanticTokens.fire();
+	}
+
 	provideDocumentSemanticTokens(
 		document: vscode.TextDocument,
 		cancellationToken: vscode.CancellationToken
 	): vscode.ProviderResult<vscode.SemanticTokens> {
-		const enabled = vscode.workspace
-			.getConfiguration('positron.julia')
-			.get<boolean>('semanticHighlighting.enabled', true);
+		const config = vscode.workspace.getConfiguration('positron.julia');
+		const enabled = config.get<boolean>('semanticHighlighting.enabled', true);
+		const stringSemanticEnabled = config.get<boolean>('semanticHighlighting.string.enabled', false);
 		if (!enabled) {
 			return new vscode.SemanticTokens(new Uint32Array());
 		}
@@ -235,8 +242,11 @@ export class JuliaSemanticTokensProvider implements vscode.DocumentSemanticToken
 			const text = document.lineAt(line).text;
 			const protectedRanges = computeProtectedRanges(text, scanState);
 			for (const range of protectedRanges) {
-				const tokenType: TokenTypeName = range.kind === 'comment' ? 'comment' : 'string';
-				collector.add(line, range.start, range.end - range.start, tokenType, [], 100);
+				if (range.kind === 'comment') {
+					collector.add(line, range.start, range.end - range.start, 'comment', [], 100);
+				} else if (stringSemanticEnabled) {
+					collector.add(line, range.start, range.end - range.start, 'string', [], 100);
+				}
 			}
 
 			collectCodeTokens(line, text, protectedRanges, collector);
@@ -247,7 +257,7 @@ export class JuliaSemanticTokensProvider implements vscode.DocumentSemanticToken
 	}
 
 	dispose(): void {
-		// Nothing to dispose.
+		this._onDidChangeSemanticTokens.dispose();
 	}
 }
 
@@ -561,8 +571,17 @@ export function registerSemanticTokensProvider(context: vscode.ExtensionContext)
 		provider,
 		LEGEND
 	);
+	const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
+		if (
+			event.affectsConfiguration('positron.julia.semanticHighlighting.enabled') ||
+			event.affectsConfiguration('positron.julia.semanticHighlighting.string.enabled')
+		) {
+			provider.refresh();
+		}
+	});
 
 	context.subscriptions.push(disposable);
+	context.subscriptions.push(configChangeDisposable);
 	context.subscriptions.push(provider);
 	LOGGER.info('Julia semantic tokens provider registered');
 	return disposable;
