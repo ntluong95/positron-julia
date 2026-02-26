@@ -12,6 +12,7 @@ import { PositronSupervisorApi } from './positron-supervisor';
 import { JuliaLanguageClient } from './lsp';
 import { juliaRuntimeDiscoverer } from './provider';
 import { registerCompletionProvider } from './completions';
+import { registerStatementRangeProvider } from './statement-range';
 
 export const LOGGER = vscode.window.createOutputChannel('Julia Language Pack', { log: true });
 
@@ -34,6 +35,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Register runtime completion provider (uses Jupyter complete_request via callMethod)
 	registerCompletionProvider(context);
+
+	// Register statement range provider (Ctrl+Enter multiline support)
+	registerStatementRangeProvider(context);
 
 	// Start language server when a Julia file is opened
 	// Also check if any Julia files are already open (e.g., after reload)
