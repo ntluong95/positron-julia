@@ -15,6 +15,7 @@ using Test
         child = joinpath(home, "positron-julia-test")
         aliased_child = Positron.alias_home(child)
         @test startswith(aliased_child, "~")
+        @test startswith(aliased_child, "~" * Base.Filesystem.path_separator)
         @test endswith(aliased_child, "positron-julia-test")
 
         outside = joinpath(tempdir(), "outside-home")
