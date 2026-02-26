@@ -336,8 +336,18 @@ function handle_ui_comm_open(kernel::PositronKernel, ijulia_comm::Any, msg::Any)
     comm = create_comm("positron.ui"; comm_id = ijulia_comm.id)
     kernel.comms["ui"] = comm
 
-    init!(kernel.ui, comm)
+    # Store comm_open message so initial notifications use a valid parent_header.
+    comm.comm_open_msg = msg
+
     setup_comm_bridge!(comm, ijulia_comm)
+    init!(kernel.ui, comm)
+
+    # Send initial working directory to seed console action bar state.
+    try
+        poll_working_directory!(kernel.ui)
+    catch e
+        kernel_log_warn("Error sending initial working directory: $e")
+    end
 end
 
 """
@@ -551,6 +561,13 @@ end
 Called after each code execution.
 """
 function on_post_execute(kernel::PositronKernel)
+    # Poll for working directory changes (e.g. after a `cd(...)` call).
+    try
+        poll_working_directory!(kernel.ui)
+    catch e
+        kernel_log_warn("Error polling working directory: $e")
+    end
+
     try
         # On first execution, send full refresh (initial population)
         # After that, send updates (changes only)

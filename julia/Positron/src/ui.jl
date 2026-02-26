@@ -16,11 +16,12 @@ The UI service handles general UI-related communication with Positron.
 mutable struct UIService
     comm::Union{PositronComm,Nothing}
     plot_render_settings::PlotRenderSettings
+    working_directory::Union{String,Nothing}
 
     function UIService()
         # Default plot render settings
         default_size = PlotSize(600, 800)
-        new(nothing, PlotRenderSettings(default_size, 1.0, PlotRenderFormat_Png))
+        new(nothing, PlotRenderSettings(default_size, 1.0, PlotRenderFormat_Png), nothing)
     end
 end
 
@@ -29,6 +30,8 @@ Initialize the UI service with a comm.
 """
 function init!(service::UIService, comm::PositronComm)
     service.comm = comm
+    # Force an initial working directory event for newly-opened UI comms.
+    service.working_directory = nothing
 
     on_msg!(comm, msg -> handle_ui_msg(service, msg))
     on_close!(comm, () -> handle_ui_close(service))
@@ -199,6 +202,60 @@ Get the current plot render settings.
 """
 function get_plot_render_settings(service::UIService)::PlotRenderSettings
     return service.plot_render_settings
+end
+
+"""
+Alias the home directory to `~` for display in the Positron console.
+"""
+function alias_home(path::String)::String
+    if isempty(path)
+        return ""
+    end
+
+    home = homedir()
+    if isempty(home)
+        return path
+    end
+
+    path_cmp = Sys.iswindows() ? lowercase(path) : path
+    home_cmp = Sys.iswindows() ? lowercase(home) : home
+
+    if path_cmp == home_cmp
+        return "~"
+    end
+
+    if startswith(path_cmp, home_cmp * "/") || startswith(path_cmp, home_cmp * "\\")
+        suffix_start = nextind(path, 0, length(home))
+        return "~" * SubString(path, suffix_start)
+    end
+
+    return path
+end
+
+"""
+Poll for a working directory change and notify the frontend when it changes.
+"""
+function poll_working_directory!(service::UIService)
+    current_dir = try
+        pwd()
+    catch e
+        kernel_log_warn("Unable to read working directory: $e")
+        ""
+    end
+
+    if current_dir == service.working_directory
+        return
+    end
+
+    service.working_directory = current_dir
+
+    if service.comm === nothing
+        return
+    end
+
+    params = UiWorkingDirectoryParams(alias_home(current_dir))
+    send_event(service.comm, "working_directory", params)
+    kernel_log_info("Sent working_directory event: $(params.directory)")
 end
 
 """
