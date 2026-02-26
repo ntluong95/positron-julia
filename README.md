@@ -1,72 +1,66 @@
 # Julia for Positron
 
-Independent Julia extension repository for Positron IDE.
+Julia language support for [Positron](https://github.com/posit-dev/positron), the next-generation data science IDE by Posit.
 
-## What This Repo Contains
+<p align="center">
+  <img src="resources/branding/julia-dots.svg" alt="Julia Logo" width="120">
+</p>
 
-- TypeScript extension runtime and command wiring in `src/`
-- Julia runtime package in `julia/Positron/`
-- Local API typings in `typings/`
-- Language config and branding assets
+## Features
+
+- **Julia Runtime** — Start interactive Julia sessions directly in Positron's Console. Define variables, run code, and inspect results with the Variables pane and Data Explorer.
+- **Language Server** — Powered by [LanguageServer.jl](https://github.com/julia-vscode/LanguageServer.jl) for diagnostics, completions, go-to-definition, hover info, and more. Automatically installed on first use.
+- **Runtime Completions** — Supplements LSP completions with live variables and functions from the running Julia session via the Jupyter `complete_request` protocol.
+- **Run Multiline Statements** — Press `Ctrl+Enter` / `Cmd+Enter` to send the full multiline statement at the cursor (functions, loops, blocks) to the console. Handles `function…end`, `if…end`, unclosed brackets, pipe chains, and more.
+- **Data Explorer** — Open DataFrames, matrices, and other tabular data in Positron's interactive Data Explorer with sorting, filtering, and summary statistics.
+- **Variables Pane** — Browse all session variables with type and value summaries.
+- **Help Integration** — View Julia documentation inline via Positron's Help pane.
+- **Plots** — Julia plots are captured and displayed in Positron's Plots pane.
 
 ## Requirements
 
-- Node.js 18+ (or newer LTS)
-- npm 9+
-- Julia 1.9+ (for Julia runtime tests)
-- Positron IDE with `positron.positron-supervisor` available
+- [Positron IDE](https://github.com/posit-dev/positron) (2024.06 or later)
+- [Julia](https://julialang.org/downloads/) 1.10 or later
 
-## Quick Start
+## Getting Started
+
+1. Install Julia from [julialang.org](https://julialang.org/downloads/) or via [juliaup](https://github.com/JuliaLang/juliaup).
+2. Install this extension in Positron (Extensions view → Install from VSIX, or from the marketplace).
+3. Open a `.jl` file or start a Julia console session from the interpreter picker.
+
+On first launch, the extension automatically installs required Julia packages (`IJulia`, `LanguageServer.jl`, and supporting dependencies). This one-time setup may take a few minutes.
+
+## Extension Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `positron.julia.executablePath` | `""` | Path to a specific Julia executable |
+| `positron.julia.languageServer.enabled` | `true` | Enable/disable the Julia Language Server |
+| `positron.julia.languageServer.environmentPath` | `""` | Path to a Julia project environment for the Language Server |
+| `julia.lint.missingrefs` | `"all"` | Control missing-reference diagnostics (`all`, `id`, `none`) |
+
+## Building from Source
 
 ```bash
+git clone https://github.com/ntluong95/positron-julia.git
+cd positron-julia
 npm install
 npm run compile
-npm run package
+npx @vscode/vsce package
 ```
 
-This generates a `.vsix` that can be installed into Positron.
+This produces a `.vsix` file that can be installed into Positron.
 
-## End User Setup
+## Project Structure
 
-For a new machine, users only need:
-
-1. Install Julia
-2. Install this extension (`.vsix`)
-3. Start a Julia console session in Positron
-
-On first session start, the extension automatically bootstraps required Julia
-packages (`IJulia`, `JSON3`, `StructTypes`, and Positron.jl dependencies) and
-LanguageServer dependencies. This can take a few minutes once, then subsequent
-starts are faster.
-
-## Testing
-
-TypeScript compile check:
-
-```bash
-npm run compile
 ```
-
-Julia runtime tests:
-
-```bash
-npm run test:julia
+src/                    TypeScript extension source
+julia/Positron/         Julia runtime package (comms, variables, help, plots, data explorer)
+scripts/languageserver/ LanguageServer.jl bootstrap scripts
+typings/                Positron & VS Code API type declarations
+syntaxes/               TextMate grammars for Julia syntax highlighting
 ```
-
-## Repository Layout
-
-- `package.json`, `tsconfig.json`: standalone extension config
-- `src/`: extension implementation (`extension.ts`, runtime/session/provider/LSP wiring)
-- `julia/Positron/`: Positron Julia runtime package and tests
-- `typings/`: extracted Positron and VS Code typings for standalone compilation
-- `language-configuration/`: Julia language configuration JSON
-- `resources/branding/`: Julia icon assets
-- `scripts/languageserver/`: Julia LanguageServer bootstrap scripts
-
-## Migration Notes
-
-See `MIGRATION.md` for details on the extraction from Positron PR #11108.
 
 ## License
 
-Elastic License 2.0. See `LICENSE`.
+Elastic License 2.0 — see [LICENSE](LICENSE).
