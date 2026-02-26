@@ -1,9 +1,9 @@
 # Julia for Positron
 
-Julia language support for [Positron](https://github.com/posit-dev/positron), the next-generation data science IDE by Posit.
+Julia language support for [Positron](https://github.com/posit-dev/positron). The project is a fork of a [PR](https://github.com/posit-dev/positron/pull/11108) made by @wesm
 
 <p align="center">
-  <img src="resources/branding/julia-dots.svg" alt="Julia Logo" width="120">
+  <img src="resources/branding/julia-icon.svg" alt="Julia Logo" width="120">
 </p>
 
 ## Features
@@ -19,7 +19,7 @@ Julia language support for [Positron](https://github.com/posit-dev/positron), th
 
 ## Requirements
 
-- [Positron IDE](https://github.com/posit-dev/positron) (2024.06 or later)
+- [Positron IDE](https://github.com/posit-dev/positron) (2026.02 or later)
 - [Julia](https://julialang.org/downloads/) 1.10 or later
 
 ## Getting Started
