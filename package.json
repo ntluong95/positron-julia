@@ -26,9 +26,6 @@
     "onCommand:julia.selectInterpreter",
     "onCommand:julia.sourceCurrentFile"
   ],
-  "extensionDependencies": [
-    "positron.positron-supervisor"
-  ],
   "contributes": {
     "languageRuntimes": [
       {
