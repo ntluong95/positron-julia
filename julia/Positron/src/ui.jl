@@ -225,7 +225,9 @@ function alias_home(path::String)::String
     end
 
     if startswith(path_cmp, home_cmp * "/") || startswith(path_cmp, home_cmp * "\\")
-        suffix_start = nextind(path, 0, length(home))
+        # Move one character past the home directory prefix so the suffix starts
+        # at the path separator ("/" or "\\") for "~/<child>" formatting.
+        suffix_start = nextind(path, 0, length(home) + 1)
         return "~" * SubString(path, suffix_start)
     end
 
