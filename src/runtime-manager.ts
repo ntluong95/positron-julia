@@ -88,7 +88,7 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 		LOGGER.info('Discovering Julia runtimes...');
 
 		for await (const installation of juliaRuntimeDiscoverer()) {
-			const metadata = createJuliaRuntimeMetadata(installation);
+			const metadata = createJuliaRuntimeMetadata(installation, this._context.extensionPath);
 			this._installations.set(metadata.runtimeId, installation);
 			LOGGER.info(`Discovered Julia ${installation.version} at ${installation.binpath}`);
 			yield metadata;
