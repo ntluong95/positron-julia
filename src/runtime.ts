@@ -80,7 +80,7 @@ export function createJuliaRuntimeMetadata(
 		languageId: 'julia',
 		languageName: 'Julia',
 		languageVersion: installation.version,
-		base64EncodedIconSvg: loadRuntimeIconSvg(extensionPath) ?? JULIA_ICON_SVG_FALLBACK,
+		base64EncodedIconSvg: getJuliaRuntimeIconBase64(extensionPath),
 		sessionLocation: getSessionLocation(),
 		startupBehavior: getStartupBehavior(installation),
 		extraRuntimeData: {
@@ -104,6 +104,13 @@ function loadRuntimeIconSvg(extensionPath: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Returns the runtime icon as base64 SVG, falling back to an embedded icon.
+ */
+export function getJuliaRuntimeIconBase64(extensionPath: string): string {
+	return loadRuntimeIconSvg(extensionPath) ?? JULIA_ICON_SVG_FALLBACK;
 }
 
 /**
