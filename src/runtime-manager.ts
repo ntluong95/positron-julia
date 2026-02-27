@@ -116,6 +116,7 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 			runtimeMetadata,
 			sessionMetadata,
 			installation,
+			this._context.extensionPath,
 			kernelSpec
 		);
 	}
@@ -142,6 +143,7 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 			runtimeMetadata,
 			sessionMetadata,
 			installation,
+			this._context.extensionPath,
 			undefined,  // No kernel spec for restore
 			sessionName
 		);
