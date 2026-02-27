@@ -14,6 +14,7 @@ using Markdown
 using Sockets
 
 const HELP_SERVER_MAX_PAGES = 128
+const HELP_METHODS_MAX = 25
 
 """
 The Help service manages the Help pane in Positron.
@@ -121,13 +122,18 @@ function get_help_content(topic::String)::Union{String,Nothing}
 
     # Get documentation
     try
-        doc = fetch_documentation(sym)
-        if doc === nothing || isempty(doc)
+        doc_html = fetch_documentation_html(sym)
+        if doc_html === nothing || isempty(doc_html)
             return nothing
         end
 
-        # Convert to HTML
-        return markdown_to_html(doc)
+        doc_html = strip_internal_ref_links(doc_html)
+        methods_html = render_methods_html(sym, topic)
+        if methods_html === nothing
+            return doc_html
+        end
+
+        return string(doc_html, methods_html)
     catch
         # Return nothing if help content can't be retrieved
         return nothing
@@ -179,20 +185,38 @@ Fetch documentation for a symbol.
 """
 function fetch_documentation(sym)::Union{String,Nothing}
     try
-        # Use the @doc macro to get documentation
+        # Resolve docs into markdown text so callers can post-process.
         doc = Base.Docs.doc(sym)
 
         if doc === nothing
             return nothing
         end
 
-        # Convert to string
-        io = IOBuffer()
-        show(IOContext(io, :color => false), MIME("text/plain"), doc)
-        return String(take!(io))
+        return sprint(show, MIME("text/markdown"), doc)
     catch
         # Return nothing if documentation can't be fetched
         return nothing
+    end
+end
+
+"""
+Render documentation for a symbol as HTML.
+"""
+function fetch_documentation_html(sym)::Union{String,Nothing}
+    try
+        doc = Base.Docs.doc(sym)
+        if doc === nothing
+            return nothing
+        end
+
+        return sprint(show, MIME("text/html"), doc)
+    catch
+        # Fallback to markdown rendering if direct HTML rendering fails.
+        md = fetch_documentation(sym)
+        if md === nothing
+            return nothing
+        end
+        return markdown_to_html(md)
     end
 end
 
@@ -212,6 +236,82 @@ function markdown_to_html(md_str::String)::String
         # Fall back to plain text wrapped in pre
         return "<pre>$(escape_html(md_str))</pre>"
     end
+end
+
+"""
+Strip unresolved internal `@ref` links from Julia doc HTML.
+"""
+function strip_internal_ref_links(html::String)::String
+    replace(html, r"<a\s+href=\"@ref[^\"]*\">(.*?)</a>"s => s"\1")
+end
+
+"""
+Render a compact methods section for function values.
+"""
+function render_methods_html(sym, topic::String)::Union{String,Nothing}
+    if !(sym isa Function)
+        return nothing
+    end
+
+    method_list = try
+        collect(methods(sym))
+    catch
+        return nothing
+    end
+
+    total = length(method_list)
+    if total == 0
+        return nothing
+    end
+
+    shown = min(total, HELP_METHODS_MAX)
+    io = IOBuffer()
+
+    print(io, "<section class=\"julia-help-methods\">")
+    print(io, "<h2>Methods</h2>")
+    method_label = total == 1 ? "method" : "methods"
+    print(
+        io,
+        "<p><code>",
+        escape_html(topic),
+        "</code> is a function with ",
+        total,
+        " ",
+        method_label,
+        ".</p>",
+    )
+    print(io, "<ol>")
+
+    for i in 1:shown
+        method = method_list[i]
+        method_text = sprint(show, method)
+        sig, location = split_method_display(method_text)
+
+        print(io, "<li><code>", escape_html(sig), "</code>")
+        if !isempty(location)
+            print(io, " in <code>", escape_html(location), "</code>")
+        end
+        print(io, "</li>")
+    end
+
+    print(io, "</ol>")
+    if shown < total
+        print(io, "<p class=\"julia-help-note\">Showing ", shown, " of ", total, " methods.</p>")
+    end
+    print(io, "</section>")
+
+    return String(take!(io))
+end
+
+"""
+Split a method display string into signature and location sections.
+"""
+function split_method_display(method_text::String)::Tuple{String,String}
+    parts = split(method_text, " @ ", limit = 2)
+    if length(parts) == 2
+        return (parts[1], parts[2])
+    end
+    return (method_text, "")
 end
 
 """
@@ -467,9 +567,74 @@ function wrap_help_html(topic::String, content_html::String)::String
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$safe_title</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+    }
+
+    .julia-help {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 0.75rem 1rem 2rem 1rem;
+    }
+
+    .julia-help h1,
+    .julia-help h2,
+    .julia-help h3 {
+      margin-top: 1.25rem;
+      margin-bottom: 0.5rem;
+      line-height: 1.25;
+    }
+
+    .julia-help p {
+      margin: 0.75rem 0;
+    }
+
+    .julia-help code {
+      font-size: 0.95em;
+      background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
+      border-radius: 4px;
+      padding: 0.1rem 0.25rem;
+    }
+
+    .julia-help pre {
+      border: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
+      border-radius: 6px;
+      padding: 0.75rem;
+      overflow-x: auto;
+      background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
+    }
+
+    .julia-help pre code {
+      background: transparent;
+      border-radius: 0;
+      padding: 0;
+    }
+
+    .julia-help ol {
+      padding-left: 1.4rem;
+      margin-top: 0.5rem;
+    }
+
+    .julia-help li {
+      margin: 0.4rem 0;
+    }
+
+    .julia-help-methods {
+      margin-top: 1.25rem;
+      padding-top: 0.25rem;
+      border-top: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
+    }
+
+    .julia-help-note {
+      color: var(--vscode-descriptionForeground, inherit);
+      font-size: 0.95em;
+    }
+  </style>
 </head>
 <body>
-  <main>
+  <main class="julia-help">
 $content_html
   </main>
 </body>
