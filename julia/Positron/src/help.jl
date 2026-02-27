@@ -373,11 +373,20 @@ function publish_help_page!(
         return nothing
     end
 
-    page_path = "/help/" * string(uuid4())
+    page_path = topic_to_help_path(topic)
     page_html = wrap_help_html(topic, html_content)
+    cache_help_page!(service, page_path, page_html)
 
+    return string(origin, page_path)
+end
+
+"""
+Cache rendered help page HTML by path.
+"""
+function cache_help_page!(service::HelpService, page_path::String, page_html::String)
     lock(service.pages_lock) do
         service.pages[page_path] = page_html
+        filter!(p -> p != page_path, service.page_order)
         push!(service.page_order, page_path)
 
         while length(service.page_order) > HELP_SERVER_MAX_PAGES
@@ -385,8 +394,6 @@ function publish_help_page!(
             delete!(service.pages, stale)
         end
     end
-
-    return string(origin, page_path)
 end
 
 """
@@ -479,8 +486,12 @@ function handle_help_http_client(service::HelpService, socket::Sockets.TCPSocket
     end
 
     path_only = split(request_path, "?", limit = 2)[1]
-    page_html = lock(service.pages_lock) do
+    local page_html = lock(service.pages_lock) do
         get(service.pages, path_only, nothing)
+    end
+
+    if page_html === nothing
+        page_html = resolve_topic_page!(service, path_only)
     end
 
     if page_html === nothing
@@ -499,6 +510,31 @@ function handle_help_http_client(service::HelpService, socket::Sockets.TCPSocket
         page_html;
         content_type = "text/html; charset=utf-8",
     )
+end
+
+"""
+Resolve topic-backed help pages on demand from `/help/topic/<encoded-topic>` paths.
+"""
+function resolve_topic_page!(service::HelpService, path_only::String)::Union{String,Nothing}
+    prefix = "/help/topic/"
+    if !startswith(path_only, prefix)
+        return nothing
+    end
+
+    encoded_topic = path_only[length(prefix)+1:end]
+    topic = decode_help_topic(encoded_topic)
+    if topic === nothing || isempty(topic)
+        return nothing
+    end
+
+    content = get_help_content(topic)
+    if content === nothing
+        return nothing
+    end
+
+    page_html = wrap_help_html(topic, content)
+    cache_help_page!(service, path_only, page_html)
+    return page_html
 end
 
 """
@@ -530,6 +566,73 @@ function read_request_path(socket::Sockets.TCPSocket)::Union{String,Nothing}
     end
 
     return request_path
+end
+
+"""
+Build a stable help path for a topic.
+"""
+function topic_to_help_path(topic::AbstractString)::String
+    cleaned = strip(String(topic))
+    encoded = encode_help_topic(cleaned)
+    return "/help/topic/$encoded"
+end
+
+"""
+Percent-encode a help topic for URL path usage.
+"""
+function encode_help_topic(topic::AbstractString)::String
+    topic = String(topic)
+    isempty(topic) && return "_"
+    io = IOBuffer()
+    for b in codeunits(topic)
+        if (b >= 0x30 && b <= 0x39) || # 0-9
+           (b >= 0x41 && b <= 0x5A) || # A-Z
+           (b >= 0x61 && b <= 0x7A) || # a-z
+           b == 0x2D || b == 0x2E || b == 0x5F || b == 0x7E # - . _ ~
+            write(io, UInt8(b))
+        else
+            write(io, UInt8('%'))
+            hex = uppercase(string(b, base = 16, pad = 2))
+            write(io, codeunits(hex))
+        end
+    end
+    return String(take!(io))
+end
+
+"""
+Decode a percent-encoded help topic path segment.
+"""
+function decode_help_topic(encoded_topic::AbstractString)::Union{String,Nothing}
+    encoded_topic = String(encoded_topic)
+    encoded_topic == "_" && return ""
+
+    bytes = UInt8[]
+    i = firstindex(encoded_topic)
+    n = lastindex(encoded_topic)
+    while i <= n
+        c = encoded_topic[i]
+        if c == '%'
+            if i + 2 > n
+                return nothing
+            end
+            hex = encoded_topic[i+1:i+2]
+            value = tryparse(UInt8, "0x$hex")
+            if value === nothing
+                return nothing
+            end
+            push!(bytes, value)
+            i += 3
+        else
+            push!(bytes, UInt8(c))
+            i = nextind(encoded_topic, i)
+        end
+    end
+
+    return try
+        String(bytes)
+    catch
+        nothing
+    end
 end
 
 """
@@ -591,6 +694,15 @@ function wrap_help_html(topic::String, content_html::String)::String
       margin: 0.75rem 0;
     }
 
+    .julia-help a {
+      text-decoration: none;
+      word-break: break-word;
+    }
+
+    .julia-help a:hover {
+      text-decoration: underline;
+    }
+
     .julia-help code {
       font-size: 0.95em;
       background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
@@ -610,6 +722,36 @@ function wrap_help_html(topic::String, content_html::String)::String
       background: transparent;
       border-radius: 0;
       padding: 0;
+    }
+
+    .julia-help pre code .tok-keyword {
+      color: var(--vscode-symbolIcon-keywordForeground, #c586c0);
+    }
+
+    .julia-help pre code .tok-string {
+      color: var(--vscode-symbolIcon-stringForeground, #ce9178);
+    }
+
+    .julia-help pre code .tok-number {
+      color: var(--vscode-symbolIcon-numberForeground, #b5cea8);
+    }
+
+    .julia-help pre code .tok-comment {
+      color: var(--vscode-descriptionForeground, #6a9955);
+      font-style: italic;
+    }
+
+    .julia-help pre code .tok-macro {
+      color: var(--vscode-symbolIcon-operatorForeground, #dcdcaa);
+    }
+
+    .julia-help pre code .tok-literal {
+      color: var(--vscode-symbolIcon-constantForeground, #569cd6);
+    }
+
+    .julia-help pre code .tok-prompt {
+      color: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
+      font-weight: 600;
     }
 
     .julia-help ol {
@@ -632,6 +774,176 @@ function wrap_help_html(topic::String, content_html::String)::String
       font-size: 0.95em;
     }
   </style>
+  <script>
+    (function () {
+      const KEYWORDS = new Set([
+        'if', 'else', 'elseif', 'while', 'for', 'begin', 'end', 'let', 'in', 'quote',
+        'try', 'catch', 'finally', 'return', 'break', 'continue', 'function', 'macro',
+        'module', 'baremodule', 'using', 'import', 'export', 'public', 'const', 'local',
+        'global', 'where', 'struct', 'mutable', 'abstract', 'primitive', 'type', 'do'
+      ]);
+      const LITERALS = new Set(['true', 'false', 'nothing', 'missing', 'undef', 'NaN', 'Inf']);
+
+      function escapeHtml(text) {
+        return text
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function shortenUrlLabel(href) {
+        try {
+          const url = new URL(href, window.location.href);
+          if (!(url.protocol === 'http:' || url.protocol === 'https:')) {
+            return href;
+          }
+
+          let label = url.hostname;
+          if (url.pathname && url.pathname !== '/') {
+            label += url.pathname;
+          }
+          if (url.search) {
+            label += url.search.length > 16 ? '?…' : url.search;
+          }
+          if (label.length > 60) {
+            label = label.slice(0, 59) + '…';
+          }
+          return label;
+        } catch {
+          return href.length > 60 ? href.slice(0, 59) + '…' : href;
+        }
+      }
+
+      function normalizeLinks() {
+        document.querySelectorAll('a[href]').forEach((anchor) => {
+          const href = (anchor.getAttribute('href') || '').trim();
+          const text = (anchor.textContent || '').trim();
+          if (!href || !text) {
+            return;
+          }
+
+          if (text === href || text === decodeURI(href)) {
+            anchor.textContent = shortenUrlLabel(href);
+            anchor.title = href;
+          }
+        });
+      }
+
+      function readWhile(text, index, predicate) {
+        let i = index;
+        while (i < text.length && predicate(text[i])) {
+          i++;
+        }
+        return i;
+      }
+
+      function tokenizeJuliaLine(line) {
+        let i = 0;
+        let out = '';
+        while (i < line.length) {
+          const ch = line[i];
+
+          if (ch === '#') {
+            out += '<span class="tok-comment">' + escapeHtml(line.slice(i)) + '</span>';
+            break;
+          }
+
+          if (line.startsWith('\"\"\"', i)) {
+            const end = line.indexOf('\"\"\"', i + 3);
+            const stop = end === -1 ? line.length : end + 3;
+            out += '<span class="tok-string">' + escapeHtml(line.slice(i, stop)) + '</span>';
+            i = stop;
+            continue;
+          }
+
+          if (ch === '"' || ch === '\'') {
+            const quote = ch;
+            let j = i + 1;
+            while (j < line.length) {
+              if (line[j] === '\\\\') {
+                j += 2;
+                continue;
+              }
+              if (line[j] === quote) {
+                j++;
+                break;
+              }
+              j++;
+            }
+            out += '<span class="tok-string">' + escapeHtml(line.slice(i, j)) + '</span>';
+            i = j;
+            continue;
+          }
+
+          if (ch === '@' && /[A-Za-z_]/.test(line[i + 1] || '')) {
+            const j = readWhile(line, i + 1, (c) => /[A-Za-z0-9_!]/.test(c));
+            out += '<span class="tok-macro">' + escapeHtml(line.slice(i, j)) + '</span>';
+            i = j;
+            continue;
+          }
+
+          if (/[0-9]/.test(ch)) {
+            const j = readWhile(line, i + 1, (c) => /[0-9_\\.eEfFxXaAbBcCdD]/.test(c));
+            out += '<span class="tok-number">' + escapeHtml(line.slice(i, j)) + '</span>';
+            i = j;
+            continue;
+          }
+
+          if (/[A-Za-z_]/.test(ch)) {
+            const j = readWhile(line, i + 1, (c) => /[A-Za-z0-9_!]/.test(c));
+            const ident = line.slice(i, j);
+            if (KEYWORDS.has(ident)) {
+              out += '<span class="tok-keyword">' + escapeHtml(ident) + '</span>';
+            } else if (LITERALS.has(ident)) {
+              out += '<span class="tok-literal">' + escapeHtml(ident) + '</span>';
+            } else {
+              out += escapeHtml(ident);
+            }
+            i = j;
+            continue;
+          }
+
+          out += escapeHtml(ch);
+          i++;
+        }
+        return out;
+      }
+
+      function highlightCodeBlock(code) {
+        if (code.querySelector('*')) {
+          return;
+        }
+
+        const raw = code.textContent || '';
+        const className = code.className || '';
+        if (className.includes('language-jldoctest')) {
+          const html = raw.split('\\n').map((line) => {
+            if (line.startsWith('julia>')) {
+              return '<span class="tok-prompt">julia&gt;</span>' + tokenizeJuliaLine(line.slice(6));
+            }
+            return escapeHtml(line);
+          }).join('\\n');
+          code.innerHTML = html;
+          return;
+        }
+
+        if (className.includes('language-julia')) {
+          code.innerHTML = raw.split('\\n').map(tokenizeJuliaLine).join('\\n');
+        }
+      }
+
+      function highlightCodeBlocks() {
+        document.querySelectorAll('pre > code').forEach((code) => highlightCodeBlock(code));
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        normalizeLinks();
+        highlightCodeBlocks();
+      });
+    })();
+  </script>
 </head>
 <body>
   <main class="julia-help">
