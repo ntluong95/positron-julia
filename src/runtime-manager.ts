@@ -20,6 +20,7 @@ import { createJuliaKernelSpec } from './kernel-spec';
 interface JuliaExtraRuntimeData {
 	homepath: string;
 	arch: string;
+	releaseDate?: string;
 }
 
 /**
@@ -76,6 +77,7 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 			version: runtimeMetadata.languageVersion,
 			semVersion: parsedVersion,
 			arch: extraData.arch || process.arch,
+			releaseDate: extraData.releaseDate,
 			current: false,
 			reasonDiscovered: ReasonDiscovered.PATH,
 		};

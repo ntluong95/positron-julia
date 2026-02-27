@@ -27,7 +27,7 @@ export function createJuliaKernelSpec(installation: JuliaInstallation): JupyterK
 	const argv = [
 		installation.binpath,
 		'-i',  // Interactive mode
-		'--color=no',  // Disable ANSI colors
+		'--color=yes',
 		'-e',
 		getKernelStartupCode(),
 		'{connection_file}',
@@ -39,10 +39,7 @@ export function createJuliaKernelSpec(installation: JuliaInstallation): JupyterK
 	const env: NodeJS.ProcessEnv = {
 		// Julia-specific environment variables
 		JULIA_NUM_THREADS: process.env.JULIA_NUM_THREADS || 'auto',
-
-		// Disable ANSI color codes in all output (NO_COLOR is standard, FORCE_COLOR=0 for compatibility)
-		NO_COLOR: '1',
-		FORCE_COLOR: '0',
+		JULIA_COLORS: 'yes',
 
 		// Positron-specific environment variables
 		POSITRON: '1',

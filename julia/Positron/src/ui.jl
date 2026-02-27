@@ -122,6 +122,35 @@ function call_interpreter_method(method::String, params::Vector)::Any
 end
 
 """
+Get startup banner text from Julia REPL.banner.
+"""
+function get_startup_banner(use_color::Bool = false)::String
+    try
+        io = IOBuffer()
+        REPL.banner(IOContext(io, :color => use_color))
+        banner = String(take!(io))
+
+        banner = replace(banner, "\r\n" => "\n")
+        banner = replace(banner, "\r" => "\n")
+
+        lines = split(banner, '\n'; keepempty = true)
+        lines = map(rstrip, lines)
+
+        while !isempty(lines) && isempty(strip(first(lines)))
+            popfirst!(lines)
+        end
+        while !isempty(lines) && isempty(strip(last(lines)))
+            pop!(lines)
+        end
+
+        return join(lines, '\n')
+    catch e
+        kernel_log_error("Failed to render REPL banner: $(sprint(showerror, e))")
+        return ""
+    end
+end
+
+"""
 Handle a completion request using Julia's REPL completions.
 
 Returns a dict matching Jupyter complete_reply format:

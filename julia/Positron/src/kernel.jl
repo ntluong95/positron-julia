@@ -144,6 +144,9 @@ function start_services!(kernel::PositronKernel = get_kernel())
 
     kernel_log_info("Starting Positron services for Julia...")
 
+    # Install custom kernel_info_request handler to provide REPL startup text
+    install_kernel_info_handler!()
+
     # Install custom is_complete_request handler for proper multi-line code handling
     install_is_complete_handler!()
 
@@ -646,6 +649,67 @@ This should be called from the IJulia startup script.
 function __init__()
     # Positron.start_services!() is called explicitly from kernel startup script
     # No automatic initialization needed here
+end
+
+# -------------------------------------------------------------------------
+# Custom kernel_info_request handler
+# -------------------------------------------------------------------------
+
+"""
+Install our custom kernel_info_request handler in IJulia.
+This allows Positron to display the Julia REPL startup banner in runtime info
+without an additional round-trip call after startup.
+"""
+function install_kernel_info_handler!()
+    if !isdefined(IJulia, :handlers)
+        kernel_log_warn("IJulia.handlers not found, cannot install custom kernel_info handler")
+        return
+    end
+
+    IJulia.handlers["kernel_info_request"] = function (socket, kernel, msg)
+        local startup_banner = ""
+        try
+            use_color = get(ENV, "NO_COLOR", "") == ""
+            startup_banner = get_startup_banner(use_color)
+        catch e
+            kernel_log_warn("Failed to build startup banner for kernel_info_reply: $e")
+        end
+
+        implementation_version = try
+            string(Base.pkgversion(IJulia))
+        catch
+            ""
+        end
+
+        IJulia.send_ipython(
+            socket,
+            kernel,
+            IJulia.msg_reply(
+                msg,
+                "kernel_info_reply",
+                Dict(
+                    "protocol_version" => "5.4",
+                    "implementation" => "ijulia",
+                    "implementation_version" => implementation_version,
+                    "language_info" => Dict(
+                        "name" => "julia",
+                        "version" => string(VERSION.major, '.', VERSION.minor, '.', VERSION.patch),
+                        "mimetype" => "application/julia",
+                        "file_extension" => ".jl",
+                    ),
+                    "banner" => startup_banner,
+                    "help_links" => [
+                        Dict("text" => "Julia Home Page", "url" => "https://julialang.org/"),
+                        Dict("text" => "Julia Documentation", "url" => "https://docs.julialang.org/"),
+                        Dict("text" => "Julia Packages", "url" => "https://juliahub.com/ui/Packages"),
+                    ],
+                    "status" => "ok",
+                ),
+            ),
+        )
+    end
+
+    kernel_log_info("Installed custom kernel_info_request handler")
 end
 
 # -------------------------------------------------------------------------

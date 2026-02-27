@@ -58,8 +58,8 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		sessionName?: string
 	) {
 		this.dynState = {
-			inputPrompt: 'julia> ',
-			continuationPrompt: '       ',
+			inputPrompt: 'julia>',
+			continuationPrompt: '      ',
 			sessionName: sessionName || runtimeMetadata.runtimeName,
 		};
 
@@ -69,6 +69,39 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		this.onDidEndSession = this._exitEmitter.event;
 		this.onDidUpdateResourceUsage = this._resourceUsageEmitter.event;
 		this._packageManager = new JuliaPackageManager(this, this._extensionPath);
+	}
+
+	private getFallbackAsciiArtLines(juliaVersionLabel: string): string[] {
+		return [
+			'               _',
+			'   _       _ _(_)_     |  Documentation: https://docs.julialang.org',
+			'  (_)     | (_) (_)    |',
+			'   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.',
+			'  | | | | | | |/ _` |  |',
+			`  | | |_| | | | (_| |  |  Version ${juliaVersionLabel}`,
+			' _/ |\\__\'_|_|_|\\__\'_|  |  Official https://julialang.org release',
+			'|__/                   |',
+		];
+	}
+
+	private buildJuliaStartupBanner(info: positron.LanguageRuntimeInfo): string {
+		const juliaVersion = info.language_version || this._installation.version;
+		const juliaReleaseDate = this._installation.releaseDate;
+		const juliaVersionLabel = juliaReleaseDate
+			? `${juliaVersion} (${juliaReleaseDate})`
+			: juliaVersion;
+		const ijuliaVersion = info.implementation_version
+			? `IJulia ${info.implementation_version}`
+			: 'IJulia';
+		const runtimeBanner = (info.banner || '').trimEnd();
+		// Preserve fixed-width spacing in ASCII banner lines in HTML output rendering.
+		const preserveSpaces = (text: string): string => text.replace(/ /g, '\u00a0');
+
+		return [
+			'Julia: A fresh approach to technical computing.',
+			`${ijuliaVersion} -- Jupyter kernel for Julia.`,
+			preserveSpaces(runtimeBanner || this.getFallbackAsciiArtLines(juliaVersionLabel).join('\n')),
+		].join('\n');
 	}
 
 	dispose(): void {
@@ -148,12 +181,15 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 
 		// Start the session
 		const info = await this._kernel.start();
-		this.runtimeInfo = info;
+		this.runtimeInfo = {
+			...info,
+			banner: this.buildJuliaStartupBanner(info),
+		};
 		// Fallback for restored sessions where a Ready transition may have already occurred.
 		this._packageManager.sourcePackagesScript().catch((error) => {
 			LOGGER.warn(`Failed to source Julia package helper script: ${error}`);
 		});
-		return info;
+		return this.runtimeInfo;
 	}
 
 	execute(

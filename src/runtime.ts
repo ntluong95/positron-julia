@@ -86,6 +86,7 @@ export function createJuliaRuntimeMetadata(
 		extraRuntimeData: {
 			homepath: installation.homepath,
 			arch: installation.arch,
+			releaseDate: installation.releaseDate,
 		},
 	};
 }

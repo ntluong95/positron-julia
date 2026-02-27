@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "928cbbc8c9dd433c8a8df3a28a65d92483340dc3"
+project_hash = "867285340bb4452068bb06e1835821e8fdcaef7c"
 
 [[deps.ArgParse]]
 deps = ["Logging", "TextWrap"]
@@ -333,7 +333,7 @@ uuid = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 version = "1.4.3"
 
 [[deps.Positron]]
-deps = ["Base64", "Coverage", "DataFrames", "Dates", "IJulia", "JSON3", "Logging", "Markdown", "PrecompileTools", "REPL", "Statistics", "StructTypes", "UUIDs"]
+deps = ["Base64", "Coverage", "DataFrames", "Dates", "IJulia", "JSON3", "Logging", "Markdown", "PrecompileTools", "REPL", "Sockets", "Statistics", "StructTypes", "UUIDs"]
 path = "."
 uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 version = "0.1.0"

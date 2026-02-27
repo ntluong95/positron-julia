@@ -38,6 +38,9 @@ export interface JuliaInstallation {
 	/** Architecture (e.g., "aarch64", "x86_64") */
 	arch: string;
 
+	/** Release/build date in YYYY-MM-DD format when available */
+	releaseDate?: string;
+
 	/** How this installation was discovered */
 	reasonDiscovered: ReasonDiscovered;
 

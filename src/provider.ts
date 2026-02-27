@@ -428,6 +428,12 @@ async function createJuliaInstallation(
 			println(VERSION)
 			println(Sys.BINDIR)
 			println(Sys.ARCH)
+			release_date = try
+				split(String(Base.GIT_VERSION_INFO.date_string), ' ')[1]
+			catch
+				""
+			end
+			println(release_date)
 		`;
 
 		const result = await runCommand(binpath, ['-e', versionScript], {
@@ -453,6 +459,10 @@ async function createJuliaInstallation(
 		const version = lines[0].trim();
 		const homepath = lines[1].trim();
 		const arch = lines[2].trim();
+		const releaseDateLine = lines[3]?.trim();
+		const releaseDate = releaseDateLine && /^\d{4}-\d{2}-\d{2}$/.test(releaseDateLine)
+			? releaseDateLine
+			: undefined;
 
 		const semVersion = semver.parse(version);
 		if (!semVersion) {
@@ -466,6 +476,7 @@ async function createJuliaInstallation(
 			version,
 			semVersion,
 			arch,
+			releaseDate,
 			reasonDiscovered,
 			current,
 		};
