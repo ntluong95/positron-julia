@@ -21,6 +21,27 @@ export const LOGGER = vscode.window.createOutputChannel('Julia Language Pack', {
 let languageClient: JuliaLanguageClient | undefined;
 let languageServerStarting: Promise<void> | undefined;
 
+async function disposeLanguageClient(): Promise<void> {
+	if (!languageClient) {
+		return;
+	}
+
+	const client = languageClient;
+	languageClient = undefined;
+
+	try {
+		await client.stop();
+	} catch (error) {
+		LOGGER.warn(`Error stopping Julia Language Server: ${error}`);
+	}
+
+	try {
+		client.dispose();
+	} catch (error) {
+		LOGGER.warn(`Error disposing Julia Language Server client: ${error}`);
+	}
+}
+
 export async function activate(context: vscode.ExtensionContext) {
 	const onDidChangeLogLevel = (logLevel: vscode.LogLevel) => {
 		LOGGER.appendLine(vscode.l10n.t('Log level: {0}', vscode.LogLevel[logLevel]));
@@ -30,7 +51,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Create and register the Julia runtime manager
 	const juliaRuntimeManager = new JuliaRuntimeManager(context);
-	positron.runtime.registerLanguageRuntimeManager('julia', juliaRuntimeManager);
+	context.subscriptions.push(
+		positron.runtime.registerLanguageRuntimeManager('julia', juliaRuntimeManager)
+	);
 
 	// Register commands
 	registerCommands(context, juliaRuntimeManager);
@@ -151,6 +174,12 @@ async function doStartLanguageServer(
 
 	LOGGER.info(`Starting Julia Language Server with Julia ${installation.version}`);
 
+	// Defensive cleanup in case a stale client instance exists.
+	if (languageClient) {
+		LOGGER.debug('Disposing stale Julia Language Server client before startup');
+		await disposeLanguageClient();
+	}
+
 	// Create and start the language client
 	languageClient = new JuliaLanguageClient(context.extensionPath);
 	context.subscriptions.push(languageClient);
@@ -166,6 +195,7 @@ async function doStartLanguageServer(
 
 export function deactivate() {
 	LOGGER.info('Positron Julia extension deactivated');
+	return disposeLanguageClient();
 }
 
 export async function supervisorApi(): Promise<PositronSupervisorApi> {
@@ -210,8 +240,7 @@ export async function ensureLanguageServerForVersion(
 	const currentVersion = currentInstallation?.version;
 	if (currentVersion && currentVersion !== installation.version) {
 		LOGGER.info(`Restarting Language Server: switching from Julia ${currentVersion} to ${installation.version}`);
-		await languageClient.stop();
-		languageClient = undefined;
+		await disposeLanguageClient();
 		const activeDocument = vscode.window.activeTextEditor?.document;
 		const preferredFilePath = activeDocument?.languageId === 'julia' ? activeDocument.uri.fsPath : undefined;
 		await startLanguageServer(context, installation, preferredFilePath);

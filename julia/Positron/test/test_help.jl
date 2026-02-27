@@ -26,6 +26,53 @@ using JSON3
         @test stripped == "<p>Use <code>print</code> for output.</p>"
     end
 
+    @testset "Method Location Formatting" begin
+        parsed = Positron.parse_method_location(
+            "Plots ~/.julia/packages/Plots/GIume/src/plot.jl:107",
+        )
+        @test parsed == ("Plots", "plot.jl:107")
+
+        html = Positron.render_method_location_html(
+            "Plots ~/.julia/packages/Plots/GIume/src/plot.jl:107",
+        )
+        @test html == " in <code>Plots</code> at <code>plot.jl:107</code>"
+
+        fallback = Positron.render_method_location_html("unknown_location")
+        @test fallback == " in <code>unknown_location</code>"
+    end
+
+    @testset "Help Page Title" begin
+        @test Positron.get_help_page_title("sum") == "Julia: sum"
+        @test Positron.get_help_page_title("Base.rand") == "Julia: rand"
+        @test Positron.get_help_page_title("NonexistentSymbol_123") == "Julia: NonexistentSymbol_123"
+    end
+
+    @testset "Help HTML Wrapping" begin
+        wrapped = Positron.wrap_help_html(
+            "Julia: println",
+            "<pre><code class=\"language-julia\">x &#61; 1</code></pre>",
+        )
+        @test occursin("/help/assets/help.css", wrapped)
+        @test !occursin("<script>", wrapped)
+        @test !occursin("<style>", wrapped)
+        @test occursin("tok-number", wrapped)
+    end
+
+    @testset "URL Label Normalization" begin
+        wrapped = Positron.wrap_help_html(
+            "Julia: docs",
+            "<p><a href=\"https://example.com/docs\">https://example.com/docs</a></p>",
+        )
+        @test occursin(">example.com/docs<", wrapped)
+        @test occursin("title=\"https://example.com/docs\"", wrapped)
+    end
+
+    @testset "Help Asset Loading" begin
+        css = Positron.read_help_asset("help.css")
+        @test css !== nothing
+        @test occursin(".julia-help", css)
+    end
+
     @testset "Symbol Resolution - Simple" begin
         # Built-in functions
         @test Positron.resolve_symbol("sum") === sum

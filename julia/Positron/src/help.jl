@@ -15,6 +15,44 @@ using Sockets
 
 const HELP_SERVER_MAX_PAGES = 128
 const HELP_METHODS_MAX = 25
+const HELP_RESOURCES_DIR = normpath(joinpath(@__DIR__, "..", "resources"))
+const JULIA_HELP_KEYWORDS = Set([
+    "if",
+    "else",
+    "elseif",
+    "while",
+    "for",
+    "begin",
+    "end",
+    "let",
+    "in",
+    "quote",
+    "try",
+    "catch",
+    "finally",
+    "return",
+    "break",
+    "continue",
+    "function",
+    "macro",
+    "module",
+    "baremodule",
+    "using",
+    "import",
+    "export",
+    "public",
+    "const",
+    "local",
+    "global",
+    "where",
+    "struct",
+    "mutable",
+    "abstract",
+    "primitive",
+    "type",
+    "do",
+])
+const JULIA_HELP_LITERALS = Set(["true", "false", "nothing", "missing", "undef", "NaN", "Inf"])
 
 """
 The Help service manages the Help pane in Positron.
@@ -253,13 +291,13 @@ function render_methods_html(sym, topic::String)::Union{String,Nothing}
         return nothing
     end
 
-    method_list = try
-        collect(methods(sym))
+    method_entries = try
+        collect_function_method_entries(sym, topic)
     catch
         return nothing
     end
 
-    total = length(method_list)
+    total = length(method_entries)
     if total == 0
         return nothing
     end
@@ -283,13 +321,11 @@ function render_methods_html(sym, topic::String)::Union{String,Nothing}
     print(io, "<ol>")
 
     for i in 1:shown
-        method = method_list[i]
-        method_text = sprint(show, method)
-        sig, location = split_method_display(method_text)
+        sig, location = method_entries[i]
 
         print(io, "<li><code>", escape_html(sig), "</code>")
         if !isempty(location)
-            print(io, " in <code>", escape_html(location), "</code>")
+            print(io, render_method_location_html(location))
         end
         print(io, "</li>")
     end
@@ -315,9 +351,110 @@ function split_method_display(method_text::String)::Tuple{String,String}
 end
 
 """
+Parse method location strings of the form `<Module> <path>:<line>` and
+return `(module_name, file_name_with_line)`.
+"""
+function parse_method_location(location::String)::Union{Nothing,Tuple{String,String}}
+    m = match(r"^([^\s]+)\s+(.+):(\d+)$", strip(location))
+    if m === nothing
+        return nothing
+    end
+
+    module_name = m.captures[1]
+    file_path = replace(m.captures[2], "\\" => "/")
+    line = m.captures[3]
+    file_name = split(file_path, "/")[end]
+    return (module_name, string(file_name, ":", line))
+end
+
+"""
+Format method location HTML using Julia VS Code-like compact location text.
+"""
+function render_method_location_html(location::String)::String
+    parsed = parse_method_location(location)
+    if parsed === nothing
+        return string(" in <code>", escape_html(location), "</code>")
+    end
+
+    module_name, file_name_with_line = parsed
+    return string(
+        " in <code>",
+        escape_html(module_name),
+        "</code> at <code>",
+        escape_html(file_name_with_line),
+        "</code>",
+    )
+end
+
+"""
+Collect method entries for display. Includes keyword-dispatch wrappers to
+match Julia VS Code method counts for functions with `; kwargs...`.
+"""
+function collect_function_method_entries(sym::Function, topic::String)::Vector{Tuple{String,String}}
+    entries = Tuple{String,String}[]
+
+    for method in methods(sym)
+        push!(entries, split_method_display(sprint(show, method)))
+    end
+
+    append!(entries, collect_kwcall_method_entries(sym, topic))
+    return entries
+end
+
+"""
+Collect `kwcall` wrappers for a function and normalize them to `topic(...; kw...)`.
+"""
+function collect_kwcall_method_entries(sym::Function, topic::String)::Vector{Tuple{String,String}}
+    kw_entries = Tuple{String,String}[]
+    target_type = typeof(sym)
+
+    for method in methods(Core.kwcall)
+        sig_type = Base.unwrap_unionall(method.sig)
+        if !(sig_type isa DataType)
+            continue
+        end
+
+        params = sig_type.parameters
+        if length(params) < 3
+            continue
+        end
+        if params[3] !== target_type
+            continue
+        end
+
+        display_sig, display_location = split_method_display(sprint(show, method))
+        normalized_sig = normalize_kwcall_signature(display_sig, topic)
+        push!(kw_entries, (normalized_sig, display_location))
+    end
+
+    return kw_entries
+end
+
+"""
+Convert a `kwcall(::NamedTuple, ::typeof(f), args...)` display signature into
+`f(args...; kw...)` for user-facing method lists.
+"""
+function normalize_kwcall_signature(signature::String, topic::String)::String
+    m = match(
+        r"^kwcall\(::NamedTuple,\s*::typeof\([^)]*\)\s*(?:,\s*)?(.*)\)$",
+        signature,
+    )
+    if m === nothing
+        return signature
+    end
+
+    args = strip(m.captures[1])
+    if isempty(args)
+        return string(topic, "(; kw...)")
+    end
+    return string(topic, "(", args, "; kw...)")
+end
+
+"""
 Escape HTML special characters.
 """
-function escape_html(s::String)::String
+function escape_html(s::AbstractString)::String
+    s = String(s)
     s = replace(s, "&" => "&amp;")
     s = replace(s, "<" => "&lt;")
     s = replace(s, ">" => "&gt;")
@@ -373,11 +510,21 @@ function publish_help_page!(
         return nothing
     end
 
-    page_path = "/help/" * string(uuid4())
-    page_html = wrap_help_html(topic, html_content)
+    page_path = topic_to_help_path(topic)
+    page_title = get_help_page_title(topic)
+    page_html = wrap_help_html(page_title, html_content)
+    cache_help_page!(service, page_path, page_html)
 
+    return string(origin, page_path)
+end
+
+"""
+Cache rendered help page HTML by path.
+"""
+function cache_help_page!(service::HelpService, page_path::String, page_html::String)
     lock(service.pages_lock) do
         service.pages[page_path] = page_html
+        filter!(p -> p != page_path, service.page_order)
         push!(service.page_order, page_path)
 
         while length(service.page_order) > HELP_SERVER_MAX_PAGES
@@ -385,8 +532,6 @@ function publish_help_page!(
             delete!(service.pages, stale)
         end
     end
-
-    return string(origin, page_path)
 end
 
 """
@@ -453,6 +598,21 @@ function run_help_server!(service::HelpService, server::Sockets.TCPServer)
         @async begin
             try
                 handle_help_http_client(service, socket)
+            catch e
+                try
+                    bt = catch_backtrace()
+                    Base.display_error(stderr, e, bt)
+                catch
+                end
+                try
+                    write_http_response(
+                        socket,
+                        "500 Internal Server Error",
+                        "<h1>Internal Server Error</h1>";
+                        content_type = "text/html; charset=utf-8",
+                    )
+                catch
+                end
             finally
                 try
                     close(socket)
@@ -479,8 +639,16 @@ function handle_help_http_client(service::HelpService, socket::Sockets.TCPSocket
     end
 
     path_only = split(request_path, "?", limit = 2)[1]
-    page_html = lock(service.pages_lock) do
+    if maybe_serve_help_asset(socket, path_only)
+        return
+    end
+
+    local page_html = lock(service.pages_lock) do
         get(service.pages, path_only, nothing)
+    end
+
+    if page_html === nothing
+        page_html = resolve_topic_page!(service, path_only)
     end
 
     if page_html === nothing
@@ -499,6 +667,88 @@ function handle_help_http_client(service::HelpService, socket::Sockets.TCPSocket
         page_html;
         content_type = "text/html; charset=utf-8",
     )
+end
+
+"""
+Resolve topic-backed help pages on demand from `/help/topic/<encoded-topic>` paths.
+"""
+function resolve_topic_page!(service::HelpService, path_only::String)::Union{String,Nothing}
+    prefix = "/help/topic/"
+    if !startswith(path_only, prefix)
+        return nothing
+    end
+
+    encoded_topic = path_only[length(prefix)+1:end]
+    topic = decode_help_topic(encoded_topic)
+    if topic === nothing || isempty(topic)
+        return nothing
+    end
+
+    content = get_help_content(topic)
+    if content === nothing
+        return nothing
+    end
+
+    page_title = get_help_page_title(topic)
+    page_html = wrap_help_html(page_title, content)
+    cache_help_page!(service, path_only, page_html)
+    return page_html
+end
+
+"""
+Build the title shown in Help navigation/history for a topic.
+Example: `Julia: plot`.
+"""
+function get_help_page_title(topic::String)::String
+    topic_label = split(strip(topic), ".")[end]
+    if isempty(topic_label)
+        return "Julia"
+    end
+    return string("Julia: ", topic_label)
+end
+
+"""
+Serve static help assets from package resources.
+"""
+function maybe_serve_help_asset(socket::Sockets.TCPSocket, path_only::AbstractString)::Bool
+    path_only = String(path_only)
+    if path_only != "/help/assets/help.css"
+        return false
+    end
+
+    css = read_help_asset("help.css")
+    if css === nothing
+        write_http_response(
+            socket,
+            "404 Not Found",
+            "<h1>Asset not found</h1>";
+            content_type = "text/html; charset=utf-8",
+        )
+        return true
+    end
+
+    write_http_response(socket, "200 OK", css; content_type = "text/css; charset=utf-8")
+    return true
+end
+
+"""
+Read a static asset from `julia/Positron/resources`.
+"""
+function read_help_asset(relative_path::String)::Union{String,Nothing}
+    if isabspath(relative_path) || any(part -> part == "..", splitpath(relative_path))
+        return nothing
+    end
+
+    asset_path = normpath(joinpath(HELP_RESOURCES_DIR, relative_path))
+    if !isfile(asset_path)
+        return nothing
+    end
+
+    return try
+        read(asset_path, String)
+    catch
+        nothing
+    end
 end
 
 """
@@ -533,6 +783,73 @@ function read_request_path(socket::Sockets.TCPSocket)::Union{String,Nothing}
 end
 
 """
+Build a stable help path for a topic.
+"""
+function topic_to_help_path(topic::AbstractString)::String
+    cleaned = strip(String(topic))
+    encoded = encode_help_topic(cleaned)
+    return "/help/topic/$encoded"
+end
+
+"""
+Percent-encode a help topic for URL path usage.
+"""
+function encode_help_topic(topic::AbstractString)::String
+    topic = String(topic)
+    isempty(topic) && return "_"
+    io = IOBuffer()
+    for b in codeunits(topic)
+        if (b >= 0x30 && b <= 0x39) || # 0-9
+           (b >= 0x41 && b <= 0x5A) || # A-Z
+           (b >= 0x61 && b <= 0x7A) || # a-z
+           b == 0x2D || b == 0x2E || b == 0x5F || b == 0x7E # - . _ ~
+            write(io, UInt8(b))
+        else
+            write(io, UInt8('%'))
+            hex = uppercase(string(b, base = 16, pad = 2))
+            write(io, codeunits(hex))
+        end
+    end
+    return String(take!(io))
+end
+
+"""
+Decode a percent-encoded help topic path segment.
+"""
+function decode_help_topic(encoded_topic::AbstractString)::Union{String,Nothing}
+    encoded_topic = String(encoded_topic)
+    encoded_topic == "_" && return ""
+
+    bytes = UInt8[]
+    i = firstindex(encoded_topic)
+    n = lastindex(encoded_topic)
+    while i <= n
+        c = encoded_topic[i]
+        if c == '%'
+            if i + 2 > n
+                return nothing
+            end
+            hex = encoded_topic[i+1:i+2]
+            value = tryparse(UInt8, "0x$hex")
+            if value === nothing
+                return nothing
+            end
+            push!(bytes, value)
+            i += 3
+        else
+            push!(bytes, UInt8(c))
+            i = nextind(encoded_topic, i)
+        end
+    end
+
+    return try
+        String(bytes)
+    catch
+        nothing
+    end
+end
+
+"""
 Write an HTTP response.
 """
 function write_http_response(
@@ -556,10 +873,342 @@ function write_http_response(
 end
 
 """
+Apply server-side transforms for help HTML content.
+"""
+function preprocess_help_content_html(content_html::String)::String
+    with_normalized_links = normalize_url_link_labels(content_html)
+    return highlight_code_blocks(with_normalized_links)
+end
+
+"""
+Rewrite URL-only anchor text to compact labels while preserving full href in `title`.
+"""
+function normalize_url_link_labels(html::String)::String
+    pattern = r"(?is)<a\b([^>]*)>(.*?)</a>"
+    return rewrite_matches(html, pattern, m -> begin
+        attrs = m.captures[1]
+        inner_html = m.captures[2]
+        attrs === nothing && return m.match
+        inner_html === nothing && return m.match
+
+        href = extract_href(attrs)
+        href === nothing && return m.match
+
+        plain_text = normalize_space(strip_html_tags(unescape_html_entities(inner_html)))
+        if isempty(plain_text) || !should_shorten_link_label(plain_text, href)
+            return m.match
+        end
+
+        has_title = occursin(r"(?i)\btitle\s*=", attrs)
+        attrs_with_title = has_title ? attrs : string(attrs, " title=\"", escape_html(href), "\"")
+        return string("<a", attrs_with_title, ">", escape_html(shorten_url_label(href)), "</a>")
+    end)
+end
+
+"""
+Tokenize Julia code blocks and emit token-class HTML on the server side.
+"""
+function highlight_code_blocks(html::String)::String
+    pattern = r"(?is)<pre>\s*<code([^>]*)>(.*?)</code>\s*</pre>"
+    return rewrite_matches(html, pattern, m -> begin
+        attrs = m.captures[1]
+        code_html = m.captures[2]
+        attrs === nothing && return m.match
+        code_html === nothing && return m.match
+
+        # Skip if the block already contains nested markup.
+        occursin(r"(?is)<[^>]+>", code_html) && return m.match
+
+        class_name = lowercase(extract_class_name(attrs))
+        code_text = unescape_html_entities(code_html)
+        highlighted = if occursin("language-jldoctest", class_name) ||
+                          occursin("language-julia-repl", class_name) ||
+                          occursin("language-juliarepl", class_name)
+            highlight_julia_repl(code_text)
+        elseif occursin("language-julia", class_name)
+            highlight_julia(code_text)
+        else
+            nothing
+        end
+
+        highlighted === nothing && return m.match
+        return string("<pre><code", attrs, ">", highlighted, "</code></pre>")
+    end)
+end
+
+function highlight_julia(code_text::String)::String
+    lines = split(code_text, '\n', keepempty = true)
+    return join((tokenize_julia_line(line) for line in lines), "\n")
+end
+
+function highlight_julia_repl(code_text::String)::String
+    rendered = String[]
+    for line in split(code_text, '\n', keepempty = true)
+        if startswith(line, "julia>")
+            rest = length(line) > 6 ? line[7:end] : ""
+            push!(rendered, string("<span class=\"tok-prompt\">julia&gt;</span>", tokenize_julia_line(rest)))
+        else
+            push!(rendered, escape_html(line))
+        end
+    end
+    return join(rendered, "\n")
+end
+
+function tokenize_julia_line(line::AbstractString)::String
+    line = String(line)
+    chars = collect(line)
+    n = length(chars)
+    io = IOBuffer()
+    i = 1
+    while i <= n
+        ch = chars[i]
+
+        if ch == '#'
+            write(io, "<span class=\"tok-comment\">", escape_html(String(chars[i:end])), "</span>")
+            break
+        end
+
+        if i + 2 <= n && chars[i] == '"' && chars[i+1] == '"' && chars[i+2] == '"'
+            stop = n
+            j = i + 3
+            while j + 2 <= n
+                if chars[j] == '"' && chars[j+1] == '"' && chars[j+2] == '"'
+                    stop = j + 2
+                    break
+                end
+                j += 1
+            end
+            write(io, "<span class=\"tok-string\">", escape_html(String(chars[i:stop])), "</span>")
+            i = stop + 1
+            continue
+        end
+
+        if ch == '"' || ch == Char(0x27)
+            quote_char = ch
+            j = i + 1
+            while j <= n
+                if chars[j] == '\\'
+                    j += 2
+                    continue
+                end
+                if chars[j] == quote_char
+                    j += 1
+                    break
+                end
+                j += 1
+            end
+            stop = min(j - 1, n)
+            write(io, "<span class=\"tok-string\">", escape_html(String(chars[i:stop])), "</span>")
+            i = stop + 1
+            continue
+        end
+
+        if ch == '@' && i < n && is_identifier_start(chars[i+1])
+            j = read_while(chars, i + 1, is_identifier_continue)
+            write(io, "<span class=\"tok-macro\">", escape_html(String(chars[i:j-1])), "</span>")
+            i = j
+            continue
+        end
+
+        if isdigit(ch)
+            j = read_while(chars, i + 1, is_number_continue)
+            write(io, "<span class=\"tok-number\">", escape_html(String(chars[i:j-1])), "</span>")
+            i = j
+            continue
+        end
+
+        if is_identifier_start(ch)
+            j = read_while(chars, i + 1, is_identifier_continue)
+            ident = String(chars[i:j-1])
+            if ident in JULIA_HELP_KEYWORDS
+                write(io, "<span class=\"tok-keyword\">", escape_html(ident), "</span>")
+            elseif ident in JULIA_HELP_LITERALS
+                write(io, "<span class=\"tok-literal\">", escape_html(ident), "</span>")
+            else
+                write(io, escape_html(ident))
+            end
+            i = j
+            continue
+        end
+
+        write(io, escape_html(string(ch)))
+        i += 1
+    end
+    return String(take!(io))
+end
+
+is_identifier_start(ch::Char)::Bool = isletter(ch) || ch == '_'
+
+function is_identifier_continue(ch::Char)::Bool
+    return isletter(ch) || isdigit(ch) || ch == '_' || ch == '!'
+end
+
+function is_number_continue(ch::Char)::Bool
+    return isdigit(ch) || ch in ('_', '.', 'e', 'E', 'f', 'F', 'x', 'X', 'a', 'A', 'b', 'B', 'c', 'C', 'd', 'D')
+end
+
+function read_while(chars::Vector{Char}, start::Int, predicate::Function)::Int
+    i = start
+    n = length(chars)
+    while i <= n && predicate(chars[i])
+        i += 1
+    end
+    return i
+end
+
+function extract_class_name(attrs::AbstractString)::String
+    m = match(r"(?is)\bclass\s*=\s*(['\"])(.*?)\1", String(attrs))
+    m === nothing && return ""
+    return m.captures[2]
+end
+
+function extract_href(attrs::AbstractString)::Union{String,Nothing}
+    m = match(r"(?is)\bhref\s*=\s*(['\"])(.*?)\1", String(attrs))
+    if m !== nothing
+        return unescape_html_entities(strip(m.captures[2]))
+    end
+
+    m = match(r"(?is)\bhref\s*=\s*([^\s>]+)", String(attrs))
+    m === nothing && return nothing
+    return unescape_html_entities(strip(m.captures[1]))
+end
+
+function should_shorten_link_label(anchor_text::String, href::String)::Bool
+    normalized_text = normalize_space(anchor_text)
+    normalized_href = strip(href)
+    href_no_slash = rstrip(normalized_href, '/')
+    decoded_href = decode_percent_sequences(normalized_href)
+    decoded_no_slash = rstrip(decoded_href, '/')
+
+    return normalized_text == normalized_href ||
+           normalized_text == decoded_href ||
+           (!isempty(href_no_slash) && normalized_text == href_no_slash) ||
+           (!isempty(decoded_no_slash) && normalized_text == decoded_no_slash)
+end
+
+function shorten_url_label(href::AbstractString)::String
+    href = String(href)
+    m = match(r"(?is)^https?://([^/?#]+)([^?#]*)?(\?[^#]*)?", href)
+    if m === nothing
+        return truncate_label(href, 60)
+    end
+
+    host = m.captures[1]
+    path = m.captures[2] === nothing ? "" : m.captures[2]
+    query = m.captures[3] === nothing ? "" : m.captures[3]
+
+    label = string(host, path)
+    if !isempty(query)
+        label *= length(query) > 16 ? "?..." : query
+    end
+    return truncate_label(label, 60)
+end
+
+function truncate_label(text::AbstractString, max_chars::Int)::String
+    text = String(text)
+    if length(text) <= max_chars
+        return text
+    end
+    if max_chars <= 3
+        return first(text, max_chars)
+    end
+    return string(first(text, max_chars - 3), "...")
+end
+
+strip_html_tags(text::AbstractString)::String = replace(String(text), r"(?is)<[^>]+>" => "")
+
+normalize_space(text::AbstractString)::String = replace(strip(String(text)), r"\s+" => " ")
+
+function decode_percent_sequences(text::AbstractString)::String
+    text = String(text)
+    bytes = UInt8[]
+    i = firstindex(text)
+    n = lastindex(text)
+    while i <= n
+        c = text[i]
+        if c == '%'
+            i1 = nextind(text, i)
+            i2 = i1 <= n ? nextind(text, i1) : i1
+            if i1 <= n && i2 <= n
+                hex = string(text[i1], text[i2])
+                value = tryparse(UInt8, "0x$hex")
+                if value !== nothing
+                    push!(bytes, value)
+                    i = nextind(text, i2)
+                    continue
+                end
+            end
+        end
+        append!(bytes, codeunits(string(c)))
+        i = nextind(text, i)
+    end
+
+    return try
+        String(bytes)
+    catch
+        text
+    end
+end
+
+function unescape_html_entities(text::AbstractString)::String
+    out = String(text)
+    out = replace(out, "&lt;" => "<")
+    out = replace(out, "&gt;" => ">")
+    out = replace(out, "&quot;" => "\"")
+    out = replace(out, "&#39;" => "'")
+    out = replace(out, "&amp;" => "&")
+
+    out = rewrite_matches(out, r"(?i)&#x([0-9a-f]+);", m -> begin
+        value = try
+            parse(Int, m.captures[1], base = 16)
+        catch
+            nothing
+        end
+        return decode_html_entity_value(value, m.match)
+    end)
+
+    out = rewrite_matches(out, r"&#([0-9]+);", m -> begin
+        value = tryparse(Int, m.captures[1])
+        return decode_html_entity_value(value, m.match)
+    end)
+    return out
+end
+
+function decode_html_entity_value(value::Union{Int,Nothing}, fallback::AbstractString)::String
+    fallback = String(fallback)
+    if value === nothing || value < 0 || value > 0x10FFFF
+        return fallback
+    end
+    return try
+        string(Char(value))
+    catch
+        fallback
+    end
+end
+
+function rewrite_matches(text::String, pattern::Regex, rewriter::Function)::String
+    io = IOBuffer()
+    cursor = firstindex(text)
+    for m in eachmatch(pattern, text)
+        start_idx = m.offset
+        if cursor < start_idx
+            write(io, SubString(text, cursor, prevind(text, start_idx)))
+        end
+        write(io, rewriter(m))
+        cursor = nextind(text, start_idx, length(m.match))
+    end
+    if cursor <= lastindex(text)
+        write(io, SubString(text, cursor, lastindex(text)))
+    end
+    return String(take!(io))
+end
+
+"""
 Build a full HTML page around rendered help content.
 """
-function wrap_help_html(topic::String, content_html::String)::String
-    safe_title = escape_html(topic)
+function wrap_help_html(page_title::String, content_html::String)::String
+    safe_title = escape_html(page_title)
+    rendered_content = preprocess_help_content_html(content_html)
     return """
 <!doctype html>
 <html lang="en">
@@ -567,75 +1216,11 @@ function wrap_help_html(topic::String, content_html::String)::String
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$safe_title</title>
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-    }
-
-    .julia-help {
-      max-width: 920px;
-      margin: 0 auto;
-      padding: 0.75rem 1rem 2rem 1rem;
-    }
-
-    .julia-help h1,
-    .julia-help h2,
-    .julia-help h3 {
-      margin-top: 1.25rem;
-      margin-bottom: 0.5rem;
-      line-height: 1.25;
-    }
-
-    .julia-help p {
-      margin: 0.75rem 0;
-    }
-
-    .julia-help code {
-      font-size: 0.95em;
-      background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
-      border-radius: 4px;
-      padding: 0.1rem 0.25rem;
-    }
-
-    .julia-help pre {
-      border: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
-      border-radius: 6px;
-      padding: 0.75rem;
-      overflow-x: auto;
-      background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
-    }
-
-    .julia-help pre code {
-      background: transparent;
-      border-radius: 0;
-      padding: 0;
-    }
-
-    .julia-help ol {
-      padding-left: 1.4rem;
-      margin-top: 0.5rem;
-    }
-
-    .julia-help li {
-      margin: 0.4rem 0;
-    }
-
-    .julia-help-methods {
-      margin-top: 1.25rem;
-      padding-top: 0.25rem;
-      border-top: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
-    }
-
-    .julia-help-note {
-      color: var(--vscode-descriptionForeground, inherit);
-      font-size: 0.95em;
-    }
-  </style>
+  <link rel="stylesheet" type="text/css" href="/help/assets/help.css">
 </head>
 <body>
   <main class="julia-help">
-$content_html
+$rendered_content
   </main>
 </body>
 </html>
