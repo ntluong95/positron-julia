@@ -20,6 +20,12 @@ using JSON3
               "&lt;a href=&quot;url&quot;&gt;text &amp; more&lt;/a&gt;"
     end
 
+    @testset "Internal @ref Links" begin
+        html = "<p>Use <a href=\"@ref\"><code>print</code></a> for output.</p>"
+        stripped = Positron.strip_internal_ref_links(html)
+        @test stripped == "<p>Use <code>print</code> for output.</p>"
+    end
+
     @testset "Symbol Resolution - Simple" begin
         # Built-in functions
         @test Positron.resolve_symbol("sum") === sum
@@ -118,6 +124,8 @@ using JSON3
 
         content = Positron.get_help_content("println")
         @test content !== nothing
+        @test occursin("julia-help-methods", content)
+        @test occursin("is a function with", content)
 
         # Types
         content = Positron.get_help_content("Int64")

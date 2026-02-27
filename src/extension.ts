@@ -14,6 +14,7 @@ import { juliaRuntimeDiscoverer } from './provider';
 import { registerCompletionProvider } from './completions';
 import { registerStatementRangeProvider } from './statement-range';
 import { registerSemanticTokensProvider } from './semantic-highlighting';
+import { registerHelpTopicProvider } from './help';
 
 export const LOGGER = vscode.window.createOutputChannel('Julia Language Pack', { log: true });
 
@@ -42,6 +43,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Register semantic highlighting provider (token-class highlighting)
 	registerSemanticTokensProvider(context);
+
+	// Register help topic provider (F1 / Help pane lookup at cursor)
+	context.subscriptions.push(registerHelpTopicProvider(() => languageClient));
 
 	// Start language server when a Julia file is opened
 	// Also check if any Julia files are already open (e.g., after reload)
