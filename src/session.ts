@@ -9,6 +9,7 @@ import * as positron from 'positron';
 import { LOGGER, supervisorApi } from './extension';
 import { JuliaInstallation } from './julia-installation';
 import { JupyterLanguageRuntimeSession, JupyterKernelSpec } from './positron-supervisor';
+import { JuliaLanguageRuntimePackage, JuliaPackageManager, JuliaPackageSpec } from './packages';
 
 interface RuntimeResourceUsage {
 	[key: string]: unknown;
@@ -21,6 +22,8 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 
 	/** The underlying Jupyter session */
 	private _kernel?: JupyterLanguageRuntimeSession;
+	private readonly _packageManager: JuliaPackageManager;
+	private readonly _suppressedExecutionIds = new Set<string>();
 
 	/** Dynamic state of the session */
 	public dynState: positron.LanguageRuntimeDynState;
@@ -33,12 +36,14 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 	};
 
 	/** Event emitters */
+	private readonly _rawMessageEmitter = new vscode.EventEmitter<positron.LanguageRuntimeMessage>();
 	private readonly _messageEmitter = new vscode.EventEmitter<positron.LanguageRuntimeMessage>();
 	private readonly _stateEmitter = new vscode.EventEmitter<positron.RuntimeState>();
 	private readonly _exitEmitter = new vscode.EventEmitter<positron.LanguageRuntimeExit>();
 	private readonly _resourceUsageEmitter = new vscode.EventEmitter<RuntimeResourceUsage>();
 
 	/** Events */
+	onDidReceiveRuntimeMessageRaw: vscode.Event<positron.LanguageRuntimeMessage>;
 	onDidReceiveRuntimeMessage: vscode.Event<positron.LanguageRuntimeMessage>;
 	onDidChangeRuntimeState: vscode.Event<positron.RuntimeState>;
 	onDidEndSession: vscode.Event<positron.LanguageRuntimeExit>;
@@ -48,6 +53,7 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		readonly runtimeMetadata: positron.LanguageRuntimeMetadata,
 		readonly metadata: positron.RuntimeSessionMetadata,
 		private readonly _installation: JuliaInstallation,
+		private readonly _extensionPath: string,
 		readonly kernelSpec?: JupyterKernelSpec,
 		sessionName?: string
 	) {
@@ -57,17 +63,27 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 			sessionName: sessionName || runtimeMetadata.runtimeName,
 		};
 
+		this.onDidReceiveRuntimeMessageRaw = this._rawMessageEmitter.event;
 		this.onDidReceiveRuntimeMessage = this._messageEmitter.event;
 		this.onDidChangeRuntimeState = this._stateEmitter.event;
 		this.onDidEndSession = this._exitEmitter.event;
 		this.onDidUpdateResourceUsage = this._resourceUsageEmitter.event;
+		this._packageManager = new JuliaPackageManager(this, this._extensionPath);
 	}
 
 	dispose(): void {
+		this._rawMessageEmitter.dispose();
 		this._messageEmitter.dispose();
 		this._stateEmitter.dispose();
 		this._exitEmitter.dispose();
 		this._resourceUsageEmitter.dispose();
+	}
+
+	suppressRuntimeMessages(executionId: string): vscode.Disposable {
+		this._suppressedExecutionIds.add(executionId);
+		return new vscode.Disposable(() => {
+			this._suppressedExecutionIds.delete(executionId);
+		});
 	}
 
 	/**
@@ -101,11 +117,19 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 
 		// Forward events from the Jupyter session
 		this._kernel.onDidReceiveRuntimeMessage((msg: positron.LanguageRuntimeMessage) => {
-			this._messageEmitter.fire(msg);
+			this._rawMessageEmitter.fire(msg);
+			if (!this._suppressedExecutionIds.has(msg.parent_id)) {
+				this._messageEmitter.fire(msg);
+			}
 		});
 
 		this._kernel.onDidChangeRuntimeState((state: positron.RuntimeState) => {
 			this._stateEmitter.fire(state);
+			if (state === positron.RuntimeState.Ready) {
+				this._packageManager.onRuntimeReady().catch((error) => {
+					LOGGER.warn(`Failed to initialize Julia package helpers: ${error}`);
+				});
+			}
 		});
 
 		this._kernel.onDidEndSession((exit: positron.LanguageRuntimeExit) => {
@@ -125,6 +149,10 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		// Start the session
 		const info = await this._kernel.start();
 		this.runtimeInfo = info;
+		// Fallback for restored sessions where a Ready transition may have already occurred.
+		this._packageManager.sourcePackagesScript().catch((error) => {
+			LOGGER.warn(`Failed to source Julia package helper script: ${error}`);
+		});
 		return info;
 	}
 
@@ -258,6 +286,34 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 			positron.RuntimeCodeExecutionMode.Interactive,
 			positron.RuntimeErrorBehavior.Continue
 		);
+	}
+
+	async getPackages(): Promise<JuliaLanguageRuntimePackage[]> {
+		return this._packageManager.getPackages();
+	}
+
+	async installPackages(packages: JuliaPackageSpec[]): Promise<void> {
+		await this._packageManager.installPackages(packages);
+	}
+
+	async uninstallPackages(packageNames: string[]): Promise<void> {
+		await this._packageManager.uninstallPackages(packageNames);
+	}
+
+	async updatePackages(packages: JuliaPackageSpec[]): Promise<void> {
+		await this._packageManager.updatePackages(packages);
+	}
+
+	async updateAllPackages(): Promise<void> {
+		await this._packageManager.updateAllPackages();
+	}
+
+	async searchPackages(query: string): Promise<JuliaLanguageRuntimePackage[]> {
+		return this._packageManager.searchPackages(query);
+	}
+
+	async searchPackageVersions(name: string): Promise<string[]> {
+		return this._packageManager.searchPackageVersions(name);
 	}
 
 	updateSessionName(name: string): void {

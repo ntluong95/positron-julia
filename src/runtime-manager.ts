@@ -11,7 +11,7 @@ import { LOGGER, supervisorApi, ensureLanguageServerForVersion } from './extensi
 import { juliaRuntimeDiscoverer } from './provider';
 import { JuliaSession } from './session';
 import { JuliaInstallation, ReasonDiscovered } from './julia-installation';
-import { createJuliaRuntimeMetadata } from './runtime';
+import { createJuliaRuntimeMetadata, getJuliaRuntimeIconBase64 } from './runtime';
 import { createJuliaKernelSpec } from './kernel-spec';
 
 /**
@@ -88,7 +88,7 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 		LOGGER.info('Discovering Julia runtimes...');
 
 		for await (const installation of juliaRuntimeDiscoverer()) {
-			const metadata = createJuliaRuntimeMetadata(installation);
+			const metadata = createJuliaRuntimeMetadata(installation, this._context.extensionPath);
 			this._installations.set(metadata.runtimeId, installation);
 			LOGGER.info(`Discovered Julia ${installation.version} at ${installation.binpath}`);
 			yield metadata;
@@ -116,6 +116,7 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 			runtimeMetadata,
 			sessionMetadata,
 			installation,
+			this._context.extensionPath,
 			kernelSpec
 		);
 	}
@@ -142,6 +143,7 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 			runtimeMetadata,
 			sessionMetadata,
 			installation,
+			this._context.extensionPath,
 			undefined,  // No kernel spec for restore
 			sessionName
 		);
@@ -164,8 +166,9 @@ export class JuliaRuntimeManager implements positron.LanguageRuntimeManager {
 	async validateMetadata(
 		metadata: positron.LanguageRuntimeMetadata
 	): Promise<positron.LanguageRuntimeMetadata> {
-		// Return metadata as-is for now
-		// TODO: Validate that the Julia installation still exists
-		return metadata;
+		return {
+			...metadata,
+			base64EncodedIconSvg: getJuliaRuntimeIconBase64(this._context.extensionPath),
+		};
 	}
 }

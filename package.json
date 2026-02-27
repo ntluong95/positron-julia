@@ -2,7 +2,7 @@
   "name": "positron-julia",
   "displayName": "Julia for Positron",
   "description": "Julia language support for Positron IDE",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "ntluong95",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,
@@ -135,6 +135,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable semantic highlighting for Julia files."
+        },
+        "positron.julia.semanticHighlighting.string.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable semantic highlighting for string tokens."
         }
       }
     },

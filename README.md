@@ -12,10 +12,12 @@ Julia language support for [Positron](https://github.com/posit-dev/positron). Th
 - **Language Server** — Powered by [LanguageServer.jl](https://github.com/julia-vscode/LanguageServer.jl) for diagnostics, completions, go-to-definition, hover info, and more. Automatically installed on first use.
 - **Runtime Completions** — Supplements LSP completions with live variables and functions from the running Julia session via the Jupyter `complete_request` protocol.
 - **Run Multiline Statements** — Press `Ctrl+Enter` / `Cmd+Enter` to send the full multiline statement at the cursor (functions, loops, blocks) to the console. Handles `function…end`, `if…end`, unclosed brackets, pipe chains, and more.
+- **Semantic Highlighting** — Enhanced syntax highlighting with semantic information from the Language Server for accurate color coding of functions, types, modules, and other language constructs.
 - **Data Explorer** — Open DataFrames, matrices, and other tabular data in Positron's interactive Data Explorer with sorting, filtering, and summary statistics.
 - **Variables Pane** — Browse all session variables with type and value summaries.
 - **Help Integration** — View Julia documentation inline via Positron's Help pane.
 - **Plots** — Julia plots are captured and displayed in Positron's Plots pane.
+- **Package Pane** — Browse and manage Julia packages directly within Positron.
 
 ## Requirements
 
@@ -39,27 +41,7 @@ On first launch, the extension automatically installs required Julia packages (`
 | `positron.julia.languageServer.environmentPath` | `""`    | Path to a Julia project environment for the Language Server |
 | `julia.lint.missingrefs`                        | `"all"` | Control missing-reference diagnostics (`all`, `id`, `none`) |
 
-## Building from Source
 
-```bash
-git clone https://github.com/ntluong95/positron-julia.git
-cd positron-julia
-npm install
-npm run compile
-npx @vscode/vsce package
-```
-
-This produces a `.vsix` file that can be installed into Positron.
-
-## Project Structure
-
-```
-src/                    TypeScript extension source
-julia/Positron/         Julia runtime package (comms, variables, help, plots, data explorer)
-scripts/languageserver/ LanguageServer.jl bootstrap scripts
-typings/                Positron & VS Code API type declarations
-syntaxes/               TextMate grammars for Julia syntax highlighting
-```
 
 ## License
 

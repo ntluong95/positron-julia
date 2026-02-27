@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import * as positron from 'positron';
 
@@ -65,7 +67,8 @@ function getSessionLocation(): positron.LanguageRuntimeSessionLocation {
  * Creates Positron runtime metadata from a Julia installation.
  */
 export function createJuliaRuntimeMetadata(
-	installation: JuliaInstallation
+	installation: JuliaInstallation,
+	extensionPath: string
 ): positron.LanguageRuntimeMetadata {
 	return {
 		runtimeId: createRuntimeId(installation),
@@ -77,7 +80,7 @@ export function createJuliaRuntimeMetadata(
 		languageId: 'julia',
 		languageName: 'Julia',
 		languageVersion: installation.version,
-		base64EncodedIconSvg: JULIA_ICON_SVG,
+		base64EncodedIconSvg: getJuliaRuntimeIconBase64(extensionPath),
 		sessionLocation: getSessionLocation(),
 		startupBehavior: getStartupBehavior(installation),
 		extraRuntimeData: {
@@ -88,10 +91,33 @@ export function createJuliaRuntimeMetadata(
 }
 
 /**
- * Julia logo SVG icon (base64 encoded).
+ * Load runtime icon from resources/branding/julia.svg.
+ */
+function loadRuntimeIconSvg(extensionPath: string): string | undefined {
+	const iconPath = path.join(extensionPath, 'resources', 'branding', 'julia.svg');
+	try {
+		const svg = fs.readFileSync(iconPath, 'utf8').trim();
+		if (!svg) {
+			return undefined;
+		}
+		return Buffer.from(svg, 'utf8').toString('base64');
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Returns the runtime icon as base64 SVG, falling back to an embedded icon.
+ */
+export function getJuliaRuntimeIconBase64(extensionPath: string): string {
+	return loadRuntimeIconSvg(extensionPath) ?? JULIA_ICON_SVG_FALLBACK;
+}
+
+/**
+ * Julia fallback SVG icon (base64 encoded).
  * Using the official Julia logo colors.
  */
-const JULIA_ICON_SVG = Buffer.from(`
+const JULIA_ICON_SVG_FALLBACK = Buffer.from(`
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
 	<circle cx="64" cy="64" r="24" fill="#CB3C33"/>
 	<circle cx="32" cy="96" r="24" fill="#9558B2"/>
