@@ -15,6 +15,44 @@ using Sockets
 
 const HELP_SERVER_MAX_PAGES = 128
 const HELP_METHODS_MAX = 25
+const HELP_RESOURCES_DIR = normpath(joinpath(@__DIR__, "..", "resources"))
+const JULIA_HELP_KEYWORDS = Set([
+    "if",
+    "else",
+    "elseif",
+    "while",
+    "for",
+    "begin",
+    "end",
+    "let",
+    "in",
+    "quote",
+    "try",
+    "catch",
+    "finally",
+    "return",
+    "break",
+    "continue",
+    "function",
+    "macro",
+    "module",
+    "baremodule",
+    "using",
+    "import",
+    "export",
+    "public",
+    "const",
+    "local",
+    "global",
+    "where",
+    "struct",
+    "mutable",
+    "abstract",
+    "primitive",
+    "type",
+    "do",
+])
+const JULIA_HELP_LITERALS = Set(["true", "false", "nothing", "missing", "undef", "NaN", "Inf"])
 
 """
 The Help service manages the Help pane in Positron.
@@ -415,7 +453,8 @@ end
 """
 Escape HTML special characters.
 """
-function escape_html(s::String)::String
+function escape_html(s::AbstractString)::String
+    s = String(s)
     s = replace(s, "&" => "&amp;")
     s = replace(s, "<" => "&lt;")
     s = replace(s, ">" => "&gt;")
@@ -472,7 +511,8 @@ function publish_help_page!(
     end
 
     page_path = topic_to_help_path(topic)
-    page_html = wrap_help_html(topic, html_content)
+    page_title = get_help_page_title(topic)
+    page_html = wrap_help_html(page_title, html_content)
     cache_help_page!(service, page_path, page_html)
 
     return string(origin, page_path)
@@ -558,6 +598,21 @@ function run_help_server!(service::HelpService, server::Sockets.TCPServer)
         @async begin
             try
                 handle_help_http_client(service, socket)
+            catch e
+                try
+                    bt = catch_backtrace()
+                    Base.display_error(stderr, e, bt)
+                catch
+                end
+                try
+                    write_http_response(
+                        socket,
+                        "500 Internal Server Error",
+                        "<h1>Internal Server Error</h1>";
+                        content_type = "text/html; charset=utf-8",
+                    )
+                catch
+                end
             finally
                 try
                     close(socket)
@@ -584,6 +639,10 @@ function handle_help_http_client(service::HelpService, socket::Sockets.TCPSocket
     end
 
     path_only = split(request_path, "?", limit = 2)[1]
+    if maybe_serve_help_asset(socket, path_only)
+        return
+    end
+
     local page_html = lock(service.pages_lock) do
         get(service.pages, path_only, nothing)
     end
@@ -630,9 +689,66 @@ function resolve_topic_page!(service::HelpService, path_only::String)::Union{Str
         return nothing
     end
 
-    page_html = wrap_help_html(topic, content)
+    page_title = get_help_page_title(topic)
+    page_html = wrap_help_html(page_title, content)
     cache_help_page!(service, path_only, page_html)
     return page_html
+end
+
+"""
+Build the title shown in Help navigation/history for a topic.
+Example: `Julia: plot`.
+"""
+function get_help_page_title(topic::String)::String
+    topic_label = split(strip(topic), ".")[end]
+    if isempty(topic_label)
+        return "Julia"
+    end
+    return string("Julia: ", topic_label)
+end
+
+"""
+Serve static help assets from package resources.
+"""
+function maybe_serve_help_asset(socket::Sockets.TCPSocket, path_only::AbstractString)::Bool
+    path_only = String(path_only)
+    if path_only != "/help/assets/help.css"
+        return false
+    end
+
+    css = read_help_asset("help.css")
+    if css === nothing
+        write_http_response(
+            socket,
+            "404 Not Found",
+            "<h1>Asset not found</h1>";
+            content_type = "text/html; charset=utf-8",
+        )
+        return true
+    end
+
+    write_http_response(socket, "200 OK", css; content_type = "text/css; charset=utf-8")
+    return true
+end
+
+"""
+Read a static asset from `julia/Positron/resources`.
+"""
+function read_help_asset(relative_path::String)::Union{String,Nothing}
+    if isabspath(relative_path) || any(part -> part == "..", splitpath(relative_path))
+        return nothing
+    end
+
+    asset_path = normpath(joinpath(HELP_RESOURCES_DIR, relative_path))
+    if !isfile(asset_path)
+        return nothing
+    end
+
+    return try
+        read(asset_path, String)
+    catch
+        nothing
+    end
 end
 
 """
@@ -757,10 +873,342 @@ function write_http_response(
 end
 
 """
+Apply server-side transforms for help HTML content.
+"""
+function preprocess_help_content_html(content_html::String)::String
+    with_normalized_links = normalize_url_link_labels(content_html)
+    return highlight_code_blocks(with_normalized_links)
+end
+
+"""
+Rewrite URL-only anchor text to compact labels while preserving full href in `title`.
+"""
+function normalize_url_link_labels(html::String)::String
+    pattern = r"(?is)<a\b([^>]*)>(.*?)</a>"
+    return rewrite_matches(html, pattern, m -> begin
+        attrs = m.captures[1]
+        inner_html = m.captures[2]
+        attrs === nothing && return m.match
+        inner_html === nothing && return m.match
+
+        href = extract_href(attrs)
+        href === nothing && return m.match
+
+        plain_text = normalize_space(strip_html_tags(unescape_html_entities(inner_html)))
+        if isempty(plain_text) || !should_shorten_link_label(plain_text, href)
+            return m.match
+        end
+
+        has_title = occursin(r"(?i)\btitle\s*=", attrs)
+        attrs_with_title = has_title ? attrs : string(attrs, " title=\"", escape_html(href), "\"")
+        return string("<a", attrs_with_title, ">", escape_html(shorten_url_label(href)), "</a>")
+    end)
+end
+
+"""
+Tokenize Julia code blocks and emit token-class HTML on the server side.
+"""
+function highlight_code_blocks(html::String)::String
+    pattern = r"(?is)<pre>\s*<code([^>]*)>(.*?)</code>\s*</pre>"
+    return rewrite_matches(html, pattern, m -> begin
+        attrs = m.captures[1]
+        code_html = m.captures[2]
+        attrs === nothing && return m.match
+        code_html === nothing && return m.match
+
+        # Skip if the block already contains nested markup.
+        occursin(r"(?is)<[^>]+>", code_html) && return m.match
+
+        class_name = lowercase(extract_class_name(attrs))
+        code_text = unescape_html_entities(code_html)
+        highlighted = if occursin("language-jldoctest", class_name) ||
+                          occursin("language-julia-repl", class_name) ||
+                          occursin("language-juliarepl", class_name)
+            highlight_julia_repl(code_text)
+        elseif occursin("language-julia", class_name)
+            highlight_julia(code_text)
+        else
+            nothing
+        end
+
+        highlighted === nothing && return m.match
+        return string("<pre><code", attrs, ">", highlighted, "</code></pre>")
+    end)
+end
+
+function highlight_julia(code_text::String)::String
+    lines = split(code_text, '\n', keepempty = true)
+    return join((tokenize_julia_line(line) for line in lines), "\n")
+end
+
+function highlight_julia_repl(code_text::String)::String
+    rendered = String[]
+    for line in split(code_text, '\n', keepempty = true)
+        if startswith(line, "julia>")
+            rest = length(line) > 6 ? line[7:end] : ""
+            push!(rendered, string("<span class=\"tok-prompt\">julia&gt;</span>", tokenize_julia_line(rest)))
+        else
+            push!(rendered, escape_html(line))
+        end
+    end
+    return join(rendered, "\n")
+end
+
+function tokenize_julia_line(line::AbstractString)::String
+    line = String(line)
+    chars = collect(line)
+    n = length(chars)
+    io = IOBuffer()
+    i = 1
+    while i <= n
+        ch = chars[i]
+
+        if ch == '#'
+            write(io, "<span class=\"tok-comment\">", escape_html(String(chars[i:end])), "</span>")
+            break
+        end
+
+        if i + 2 <= n && chars[i] == '"' && chars[i+1] == '"' && chars[i+2] == '"'
+            stop = n
+            j = i + 3
+            while j + 2 <= n
+                if chars[j] == '"' && chars[j+1] == '"' && chars[j+2] == '"'
+                    stop = j + 2
+                    break
+                end
+                j += 1
+            end
+            write(io, "<span class=\"tok-string\">", escape_html(String(chars[i:stop])), "</span>")
+            i = stop + 1
+            continue
+        end
+
+        if ch == '"' || ch == Char(0x27)
+            quote_char = ch
+            j = i + 1
+            while j <= n
+                if chars[j] == '\\'
+                    j += 2
+                    continue
+                end
+                if chars[j] == quote_char
+                    j += 1
+                    break
+                end
+                j += 1
+            end
+            stop = min(j - 1, n)
+            write(io, "<span class=\"tok-string\">", escape_html(String(chars[i:stop])), "</span>")
+            i = stop + 1
+            continue
+        end
+
+        if ch == '@' && i < n && is_identifier_start(chars[i+1])
+            j = read_while(chars, i + 1, is_identifier_continue)
+            write(io, "<span class=\"tok-macro\">", escape_html(String(chars[i:j-1])), "</span>")
+            i = j
+            continue
+        end
+
+        if isdigit(ch)
+            j = read_while(chars, i + 1, is_number_continue)
+            write(io, "<span class=\"tok-number\">", escape_html(String(chars[i:j-1])), "</span>")
+            i = j
+            continue
+        end
+
+        if is_identifier_start(ch)
+            j = read_while(chars, i + 1, is_identifier_continue)
+            ident = String(chars[i:j-1])
+            if ident in JULIA_HELP_KEYWORDS
+                write(io, "<span class=\"tok-keyword\">", escape_html(ident), "</span>")
+            elseif ident in JULIA_HELP_LITERALS
+                write(io, "<span class=\"tok-literal\">", escape_html(ident), "</span>")
+            else
+                write(io, escape_html(ident))
+            end
+            i = j
+            continue
+        end
+
+        write(io, escape_html(string(ch)))
+        i += 1
+    end
+    return String(take!(io))
+end
+
+is_identifier_start(ch::Char)::Bool = isletter(ch) || ch == '_'
+
+function is_identifier_continue(ch::Char)::Bool
+    return isletter(ch) || isdigit(ch) || ch == '_' || ch == '!'
+end
+
+function is_number_continue(ch::Char)::Bool
+    return isdigit(ch) || ch in ('_', '.', 'e', 'E', 'f', 'F', 'x', 'X', 'a', 'A', 'b', 'B', 'c', 'C', 'd', 'D')
+end
+
+function read_while(chars::Vector{Char}, start::Int, predicate::Function)::Int
+    i = start
+    n = length(chars)
+    while i <= n && predicate(chars[i])
+        i += 1
+    end
+    return i
+end
+
+function extract_class_name(attrs::AbstractString)::String
+    m = match(r"(?is)\bclass\s*=\s*(['\"])(.*?)\1", String(attrs))
+    m === nothing && return ""
+    return m.captures[2]
+end
+
+function extract_href(attrs::AbstractString)::Union{String,Nothing}
+    m = match(r"(?is)\bhref\s*=\s*(['\"])(.*?)\1", String(attrs))
+    if m !== nothing
+        return unescape_html_entities(strip(m.captures[2]))
+    end
+
+    m = match(r"(?is)\bhref\s*=\s*([^\s>]+)", String(attrs))
+    m === nothing && return nothing
+    return unescape_html_entities(strip(m.captures[1]))
+end
+
+function should_shorten_link_label(anchor_text::String, href::String)::Bool
+    normalized_text = normalize_space(anchor_text)
+    normalized_href = strip(href)
+    href_no_slash = rstrip(normalized_href, '/')
+    decoded_href = decode_percent_sequences(normalized_href)
+    decoded_no_slash = rstrip(decoded_href, '/')
+
+    return normalized_text == normalized_href ||
+           normalized_text == decoded_href ||
+           (!isempty(href_no_slash) && normalized_text == href_no_slash) ||
+           (!isempty(decoded_no_slash) && normalized_text == decoded_no_slash)
+end
+
+function shorten_url_label(href::AbstractString)::String
+    href = String(href)
+    m = match(r"(?is)^https?://([^/?#]+)([^?#]*)?(\?[^#]*)?", href)
+    if m === nothing
+        return truncate_label(href, 60)
+    end
+
+    host = m.captures[1]
+    path = m.captures[2] === nothing ? "" : m.captures[2]
+    query = m.captures[3] === nothing ? "" : m.captures[3]
+
+    label = string(host, path)
+    if !isempty(query)
+        label *= length(query) > 16 ? "?..." : query
+    end
+    return truncate_label(label, 60)
+end
+
+function truncate_label(text::AbstractString, max_chars::Int)::String
+    text = String(text)
+    if length(text) <= max_chars
+        return text
+    end
+    if max_chars <= 3
+        return first(text, max_chars)
+    end
+    return string(first(text, max_chars - 3), "...")
+end
+
+strip_html_tags(text::AbstractString)::String = replace(String(text), r"(?is)<[^>]+>" => "")
+
+normalize_space(text::AbstractString)::String = replace(strip(String(text)), r"\s+" => " ")
+
+function decode_percent_sequences(text::AbstractString)::String
+    text = String(text)
+    bytes = UInt8[]
+    i = firstindex(text)
+    n = lastindex(text)
+    while i <= n
+        c = text[i]
+        if c == '%'
+            i1 = nextind(text, i)
+            i2 = i1 <= n ? nextind(text, i1) : i1
+            if i1 <= n && i2 <= n
+                hex = string(text[i1], text[i2])
+                value = tryparse(UInt8, "0x$hex")
+                if value !== nothing
+                    push!(bytes, value)
+                    i = nextind(text, i2)
+                    continue
+                end
+            end
+        end
+        append!(bytes, codeunits(string(c)))
+        i = nextind(text, i)
+    end
+
+    return try
+        String(bytes)
+    catch
+        text
+    end
+end
+
+function unescape_html_entities(text::AbstractString)::String
+    out = String(text)
+    out = replace(out, "&lt;" => "<")
+    out = replace(out, "&gt;" => ">")
+    out = replace(out, "&quot;" => "\"")
+    out = replace(out, "&#39;" => "'")
+    out = replace(out, "&amp;" => "&")
+
+    out = rewrite_matches(out, r"(?i)&#x([0-9a-f]+);", m -> begin
+        value = try
+            parse(Int, m.captures[1], base = 16)
+        catch
+            nothing
+        end
+        return decode_html_entity_value(value, m.match)
+    end)
+
+    out = rewrite_matches(out, r"&#([0-9]+);", m -> begin
+        value = tryparse(Int, m.captures[1])
+        return decode_html_entity_value(value, m.match)
+    end)
+    return out
+end
+
+function decode_html_entity_value(value::Union{Int,Nothing}, fallback::AbstractString)::String
+    fallback = String(fallback)
+    if value === nothing || value < 0 || value > 0x10FFFF
+        return fallback
+    end
+    return try
+        string(Char(value))
+    catch
+        fallback
+    end
+end
+
+function rewrite_matches(text::String, pattern::Regex, rewriter::Function)::String
+    io = IOBuffer()
+    cursor = firstindex(text)
+    for m in eachmatch(pattern, text)
+        start_idx = m.offset
+        if cursor < start_idx
+            write(io, SubString(text, cursor, prevind(text, start_idx)))
+        end
+        write(io, rewriter(m))
+        cursor = nextind(text, start_idx, length(m.match))
+    end
+    if cursor <= lastindex(text)
+        write(io, SubString(text, cursor, lastindex(text)))
+    end
+    return String(take!(io))
+end
+
+"""
 Build a full HTML page around rendered help content.
 """
-function wrap_help_html(topic::String, content_html::String)::String
-    safe_title = escape_html(topic)
+function wrap_help_html(page_title::String, content_html::String)::String
+    safe_title = escape_html(page_title)
+    rendered_content = preprocess_help_content_html(content_html)
     return """
 <!doctype html>
 <html lang="en">
@@ -768,295 +1216,11 @@ function wrap_help_html(topic::String, content_html::String)::String
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$safe_title</title>
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-    }
-
-    .julia-help {
-      max-width: 920px;
-      margin: 0 auto;
-      padding: 0.75rem 1rem 2rem 1rem;
-    }
-
-    .julia-help h1,
-    .julia-help h2,
-    .julia-help h3 {
-      margin-top: 1.25rem;
-      margin-bottom: 0.5rem;
-      line-height: 1.25;
-    }
-
-    .julia-help p {
-      margin: 0.75rem 0;
-    }
-
-    .julia-help a {
-      text-decoration: none;
-      word-break: break-word;
-    }
-
-    .julia-help a:hover {
-      text-decoration: underline;
-    }
-
-    .julia-help code {
-      font-size: 0.95em;
-      background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
-      border-radius: 4px;
-      padding: 0.1rem 0.25rem;
-    }
-
-    .julia-help pre {
-      border: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
-      border-radius: 6px;
-      padding: 0.75rem;
-      overflow-x: auto;
-      background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
-    }
-
-    .julia-help pre code {
-      background: transparent;
-      border-radius: 0;
-      padding: 0;
-    }
-
-    .julia-help pre code .tok-keyword {
-      color: var(--vscode-symbolIcon-keywordForeground, #c586c0);
-    }
-
-    .julia-help pre code .tok-string {
-      color: var(--vscode-symbolIcon-stringForeground, #ce9178);
-    }
-
-    .julia-help pre code .tok-number {
-      color: var(--vscode-symbolIcon-numberForeground, #b5cea8);
-    }
-
-    .julia-help pre code .tok-comment {
-      color: var(--vscode-descriptionForeground, #6a9955);
-      font-style: italic;
-    }
-
-    .julia-help pre code .tok-macro {
-      color: var(--vscode-symbolIcon-operatorForeground, #dcdcaa);
-    }
-
-    .julia-help pre code .tok-literal {
-      color: var(--vscode-symbolIcon-constantForeground, #569cd6);
-    }
-
-    .julia-help pre code .tok-prompt {
-      color: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
-      font-weight: 600;
-    }
-
-    .julia-help ol {
-      padding-left: 1.4rem;
-      margin-top: 0.5rem;
-    }
-
-    .julia-help li {
-      margin: 0.4rem 0;
-    }
-
-    .julia-help-methods {
-      margin-top: 1.25rem;
-      padding-top: 0.25rem;
-      border-top: 1px solid var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
-    }
-
-    .julia-help-note {
-      color: var(--vscode-descriptionForeground, inherit);
-      font-size: 0.95em;
-    }
-  </style>
-  <script>
-    (function () {
-      const KEYWORDS = new Set([
-        'if', 'else', 'elseif', 'while', 'for', 'begin', 'end', 'let', 'in', 'quote',
-        'try', 'catch', 'finally', 'return', 'break', 'continue', 'function', 'macro',
-        'module', 'baremodule', 'using', 'import', 'export', 'public', 'const', 'local',
-        'global', 'where', 'struct', 'mutable', 'abstract', 'primitive', 'type', 'do'
-      ]);
-      const LITERALS = new Set(['true', 'false', 'nothing', 'missing', 'undef', 'NaN', 'Inf']);
-
-      function escapeHtml(text) {
-        return text
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-      }
-
-      function shortenUrlLabel(href) {
-        try {
-          const url = new URL(href, window.location.href);
-          if (!(url.protocol === 'http:' || url.protocol === 'https:')) {
-            return href;
-          }
-
-          let label = url.hostname;
-          if (url.pathname && url.pathname !== '/') {
-            label += url.pathname;
-          }
-          if (url.search) {
-            label += url.search.length > 16 ? '?…' : url.search;
-          }
-          if (label.length > 60) {
-            label = label.slice(0, 59) + '…';
-          }
-          return label;
-        } catch {
-          return href.length > 60 ? href.slice(0, 59) + '…' : href;
-        }
-      }
-
-      function normalizeLinks() {
-        document.querySelectorAll('a[href]').forEach((anchor) => {
-          const href = (anchor.getAttribute('href') || '').trim();
-          const text = (anchor.textContent || '').trim();
-          if (!href || !text) {
-            return;
-          }
-
-          const normalizedText = text.replace(/\\s+/g, ' ').trim();
-          const normalizedHref = href.endsWith('/') ? href.slice(0, -1) : href;
-          if (
-            normalizedText === href ||
-            normalizedText === decodeURI(href) ||
-            normalizedText === normalizedHref ||
-            normalizedText === decodeURI(normalizedHref)
-          ) {
-            anchor.textContent = shortenUrlLabel(href);
-            anchor.title = href;
-          }
-        });
-      }
-
-      function readWhile(text, index, predicate) {
-        let i = index;
-        while (i < text.length && predicate(text[i])) {
-          i++;
-        }
-        return i;
-      }
-
-      function tokenizeJuliaLine(line) {
-        let i = 0;
-        let out = '';
-        while (i < line.length) {
-          const ch = line[i];
-
-          if (ch === '#') {
-            out += '<span class="tok-comment">' + escapeHtml(line.slice(i)) + '</span>';
-            break;
-          }
-
-          if (line.startsWith('\"\"\"', i)) {
-            const end = line.indexOf('\"\"\"', i + 3);
-            const stop = end === -1 ? line.length : end + 3;
-            out += '<span class="tok-string">' + escapeHtml(line.slice(i, stop)) + '</span>';
-            i = stop;
-            continue;
-          }
-
-          if (ch === '"' || ch === "'") {
-            const quote = ch;
-            let j = i + 1;
-            while (j < line.length) {
-              if (line[j] === '\\\\') {
-                j += 2;
-                continue;
-              }
-              if (line[j] === quote) {
-                j++;
-                break;
-              }
-              j++;
-            }
-            out += '<span class="tok-string">' + escapeHtml(line.slice(i, j)) + '</span>';
-            i = j;
-            continue;
-          }
-
-          if (ch === '@' && /[A-Za-z_]/.test(line[i + 1] || '')) {
-            const j = readWhile(line, i + 1, (c) => /[A-Za-z0-9_!]/.test(c));
-            out += '<span class="tok-macro">' + escapeHtml(line.slice(i, j)) + '</span>';
-            i = j;
-            continue;
-          }
-
-          if (/[0-9]/.test(ch)) {
-            const j = readWhile(line, i + 1, (c) => /[0-9_\\.eEfFxXaAbBcCdD]/.test(c));
-            out += '<span class="tok-number">' + escapeHtml(line.slice(i, j)) + '</span>';
-            i = j;
-            continue;
-          }
-
-          if (/[A-Za-z_]/.test(ch)) {
-            const j = readWhile(line, i + 1, (c) => /[A-Za-z0-9_!]/.test(c));
-            const ident = line.slice(i, j);
-            if (KEYWORDS.has(ident)) {
-              out += '<span class="tok-keyword">' + escapeHtml(ident) + '</span>';
-            } else if (LITERALS.has(ident)) {
-              out += '<span class="tok-literal">' + escapeHtml(ident) + '</span>';
-            } else {
-              out += escapeHtml(ident);
-            }
-            i = j;
-            continue;
-          }
-
-          out += escapeHtml(ch);
-          i++;
-        }
-        return out;
-      }
-
-      function highlightCodeBlock(code) {
-        if (code.querySelector('*')) {
-          return;
-        }
-
-        const raw = code.textContent || '';
-        const className = code.className || '';
-        if (
-          className.includes('language-jldoctest') ||
-          className.includes('language-julia-repl') ||
-          className.includes('language-juliarepl')
-        ) {
-          const html = raw.split('\\n').map((line) => {
-            if (line.startsWith('julia>')) {
-              return '<span class="tok-prompt">julia&gt;</span>' + tokenizeJuliaLine(line.slice(6));
-            }
-            return escapeHtml(line);
-          }).join('\\n');
-          code.innerHTML = html;
-          return;
-        }
-
-        if (className.includes('language-julia')) {
-          code.innerHTML = raw.split('\\n').map(tokenizeJuliaLine).join('\\n');
-        }
-      }
-
-      function highlightCodeBlocks() {
-        document.querySelectorAll('pre > code').forEach((code) => highlightCodeBlock(code));
-      }
-
-      document.addEventListener('DOMContentLoaded', () => {
-        normalizeLinks();
-        highlightCodeBlocks();
-      });
-    })();
-  </script>
+  <link rel="stylesheet" type="text/css" href="/help/assets/help.css">
 </head>
 <body>
   <main class="julia-help">
-$content_html
+$rendered_content
   </main>
 </body>
 </html>
