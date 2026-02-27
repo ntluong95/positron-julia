@@ -468,6 +468,46 @@ export class JuliaLanguageClient implements vscode.Disposable {
 		return this._client !== undefined && this._client.isRunning();
 	}
 
+	/**
+	 * Resolve a help topic for a cursor position via custom LSP request.
+	 */
+	async getHelpTopic(
+		document: vscode.TextDocument,
+		position: vscode.Position
+	): Promise<string | undefined> {
+		if (!this._client || !this._client.isRunning()) {
+			return undefined;
+		}
+
+		try {
+			const result = await this._client.sendRequest('positron/textDocument/helpTopic', {
+				textDocument: { uri: document.uri.toString() },
+				position: {
+					line: position.line,
+					character: position.character,
+				},
+			}) as unknown;
+
+			if (typeof result === 'string') {
+				const topic = result.trim();
+				return topic.length > 0 ? topic : undefined;
+			}
+
+			if (result && typeof result === 'object') {
+				const maybeTopic = (result as { topic?: unknown }).topic;
+				if (typeof maybeTopic === 'string') {
+					const topic = maybeTopic.trim();
+					return topic.length > 0 ? topic : undefined;
+				}
+			}
+		} catch (error) {
+			// Most servers won't implement this request. Provider will use textual fallback.
+			LOGGER.debug(`Help topic request unavailable: ${error}`);
+		}
+
+		return undefined;
+	}
+
 	dispose(): void {
 		this.stop();
 		this._outputChannel.dispose();
