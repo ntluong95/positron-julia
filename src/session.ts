@@ -71,7 +71,7 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		this._packageManager = new JuliaPackageManager(this, this._extensionPath);
 	}
 
-	private getFallbackAsciiArtLines(juliaVersionLabel: string): string[] {
+	private getDenseAsciiArtLines(juliaVersionLabel: string): string[] {
 		return [
 			'               _',
 			'   _       _ _(_)_     |  Documentation: https://docs.julialang.org',
@@ -93,15 +93,17 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		const ijuliaVersion = info.implementation_version
 			? `IJulia ${info.implementation_version}`
 			: 'IJulia';
-		const runtimeBanner = (info.banner || '').trimEnd();
 		// Preserve fixed-width spacing in ASCII banner lines in HTML output rendering.
 		const preserveSpaces = (text: string): string => text.replace(/ /g, '\u00a0');
 
-		return [
+		const banner = [
 			'Julia: A fresh approach to technical computing.',
 			`${ijuliaVersion} -- Jupyter kernel for Julia.`,
-			preserveSpaces(runtimeBanner || this.getFallbackAsciiArtLines(juliaVersionLabel).join('\n')),
-		].join('\n');
+			preserveSpaces(this.getDenseAsciiArtLines(juliaVersionLabel).join('\n')),
+		].join('\n').trimEnd();
+
+		// Use two trailing newlines to reliably render exactly one blank line before the prompt.
+		return `${banner}\n\n`;
 	}
 
 	dispose(): void {
