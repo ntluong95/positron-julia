@@ -23,6 +23,7 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 	/** The underlying Jupyter session */
 	private _kernel?: JupyterLanguageRuntimeSession;
 	private readonly _packageManager: JuliaPackageManager;
+	private readonly _suppressedExecutionIds = new Set<string>();
 
 	/** Dynamic state of the session */
 	public dynState: positron.LanguageRuntimeDynState;
@@ -35,12 +36,14 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 	};
 
 	/** Event emitters */
+	private readonly _rawMessageEmitter = new vscode.EventEmitter<positron.LanguageRuntimeMessage>();
 	private readonly _messageEmitter = new vscode.EventEmitter<positron.LanguageRuntimeMessage>();
 	private readonly _stateEmitter = new vscode.EventEmitter<positron.RuntimeState>();
 	private readonly _exitEmitter = new vscode.EventEmitter<positron.LanguageRuntimeExit>();
 	private readonly _resourceUsageEmitter = new vscode.EventEmitter<RuntimeResourceUsage>();
 
 	/** Events */
+	onDidReceiveRuntimeMessageRaw: vscode.Event<positron.LanguageRuntimeMessage>;
 	onDidReceiveRuntimeMessage: vscode.Event<positron.LanguageRuntimeMessage>;
 	onDidChangeRuntimeState: vscode.Event<positron.RuntimeState>;
 	onDidEndSession: vscode.Event<positron.LanguageRuntimeExit>;
@@ -60,6 +63,7 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 			sessionName: sessionName || runtimeMetadata.runtimeName,
 		};
 
+		this.onDidReceiveRuntimeMessageRaw = this._rawMessageEmitter.event;
 		this.onDidReceiveRuntimeMessage = this._messageEmitter.event;
 		this.onDidChangeRuntimeState = this._stateEmitter.event;
 		this.onDidEndSession = this._exitEmitter.event;
@@ -68,10 +72,18 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 	}
 
 	dispose(): void {
+		this._rawMessageEmitter.dispose();
 		this._messageEmitter.dispose();
 		this._stateEmitter.dispose();
 		this._exitEmitter.dispose();
 		this._resourceUsageEmitter.dispose();
+	}
+
+	suppressRuntimeMessages(executionId: string): vscode.Disposable {
+		this._suppressedExecutionIds.add(executionId);
+		return new vscode.Disposable(() => {
+			this._suppressedExecutionIds.delete(executionId);
+		});
 	}
 
 	/**
@@ -105,7 +117,10 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 
 		// Forward events from the Jupyter session
 		this._kernel.onDidReceiveRuntimeMessage((msg: positron.LanguageRuntimeMessage) => {
-			this._messageEmitter.fire(msg);
+			this._rawMessageEmitter.fire(msg);
+			if (!this._suppressedExecutionIds.has(msg.parent_id)) {
+				this._messageEmitter.fire(msg);
+			}
 		});
 
 		this._kernel.onDidChangeRuntimeState((state: positron.RuntimeState) => {

@@ -32,7 +32,8 @@ interface JuliaPackageSession {
 		mode: positron.RuntimeCodeExecutionMode,
 		errorBehavior: positron.RuntimeErrorBehavior
 	): void;
-	onDidReceiveRuntimeMessage: vscode.Event<positron.LanguageRuntimeMessage>;
+	onDidReceiveRuntimeMessageRaw: vscode.Event<positron.LanguageRuntimeMessage>;
+	suppressRuntimeMessages(executionId: string): vscode.Disposable;
 }
 
 export class JuliaPackageManager {
@@ -82,7 +83,7 @@ export class JuliaPackageManager {
 
 	async getPackages(): Promise<JuliaLanguageRuntimePackage[]> {
 		await this.sourcePackagesScript();
-		const raw = await this._executeAndCapture('_positron_list_packages()', positron.RuntimeCodeExecutionMode.Transient, QUERY_TIMEOUT_MS);
+		const raw = await this._executeAndCapture('_positron_list_packages()', positron.RuntimeCodeExecutionMode.Silent, QUERY_TIMEOUT_MS);
 		return this._parsePackages(raw);
 	}
 
@@ -137,7 +138,7 @@ export class JuliaPackageManager {
 		const escaped = this._escapeJuliaStringLiteral(query);
 		const raw = await this._executeAndCapture(
 			`_positron_search_packages("${escaped}")`,
-			positron.RuntimeCodeExecutionMode.Transient,
+			positron.RuntimeCodeExecutionMode.Silent,
 			QUERY_TIMEOUT_MS
 		);
 		return this._parsePackages(raw);
@@ -148,7 +149,7 @@ export class JuliaPackageManager {
 		const escaped = this._escapeJuliaStringLiteral(name);
 		const raw = await this._executeAndCapture(
 			`_positron_search_package_versions("${escaped}")`,
-			positron.RuntimeCodeExecutionMode.Transient,
+			positron.RuntimeCodeExecutionMode.Silent,
 			QUERY_TIMEOUT_MS
 		);
 		return this._parseStringArray(raw);
@@ -231,7 +232,7 @@ export class JuliaPackageManager {
 
 	private async _executeAndCapture(
 		code: string,
-		mode: positron.RuntimeCodeExecutionMode = positron.RuntimeCodeExecutionMode.Transient,
+		mode: positron.RuntimeCodeExecutionMode = positron.RuntimeCodeExecutionMode.Silent,
 		timeoutMs: number = QUERY_TIMEOUT_MS
 	): Promise<string> {
 		const result = await this._execute(code, mode, timeoutMs);
@@ -255,11 +256,13 @@ export class JuliaPackageManager {
 			let settled = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			let messageDisposable: vscode.Disposable | undefined;
+			let suppressDisposable: vscode.Disposable | undefined;
 
 			const cleanup = () => {
 				if (timeoutHandle) {
 					clearTimeout(timeoutHandle);
 				}
+				suppressDisposable?.dispose();
 				messageDisposable?.dispose();
 			};
 
@@ -285,7 +288,11 @@ export class JuliaPackageManager {
 				finishReject(new Error(`Timed out waiting for Julia package command to finish (${timeoutMs}ms)`));
 			}, timeoutMs);
 
-			messageDisposable = this._session.onDidReceiveRuntimeMessage((message) => {
+			if (mode === positron.RuntimeCodeExecutionMode.Silent) {
+				suppressDisposable = this._session.suppressRuntimeMessages(executionId);
+			}
+
+			messageDisposable = this._session.onDidReceiveRuntimeMessageRaw((message) => {
 				if (message.parent_id !== executionId) {
 					return;
 				}
