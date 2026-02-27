@@ -253,13 +253,13 @@ function render_methods_html(sym, topic::String)::Union{String,Nothing}
         return nothing
     end
 
-    method_list = try
-        collect(methods(sym))
+    method_entries = try
+        collect_function_method_entries(sym, topic)
     catch
         return nothing
     end
 
-    total = length(method_list)
+    total = length(method_entries)
     if total == 0
         return nothing
     end
@@ -283,9 +283,7 @@ function render_methods_html(sym, topic::String)::Union{String,Nothing}
     print(io, "<ol>")
 
     for i in 1:shown
-        method = method_list[i]
-        method_text = sprint(show, method)
-        sig, location = split_method_display(method_text)
+        sig, location = method_entries[i]
 
         print(io, "<li><code>", escape_html(sig), "</code>")
         if !isempty(location)
@@ -312,6 +310,70 @@ function split_method_display(method_text::String)::Tuple{String,String}
         return (parts[1], parts[2])
     end
     return (method_text, "")
+end
+
+"""
+Collect method entries for display. Includes keyword-dispatch wrappers to
+match Julia VS Code method counts for functions with `; kwargs...`.
+"""
+function collect_function_method_entries(sym::Function, topic::String)::Vector{Tuple{String,String}}
+    entries = Tuple{String,String}[]
+
+    for method in methods(sym)
+        push!(entries, split_method_display(sprint(show, method)))
+    end
+
+    append!(entries, collect_kwcall_method_entries(sym, topic))
+    return entries
+end
+
+"""
+Collect `kwcall` wrappers for a function and normalize them to `topic(...; kw...)`.
+"""
+function collect_kwcall_method_entries(sym::Function, topic::String)::Vector{Tuple{String,String}}
+    kw_entries = Tuple{String,String}[]
+    target_type = typeof(sym)
+
+    for method in methods(Core.kwcall)
+        sig_type = Base.unwrap_unionall(method.sig)
+        if !(sig_type isa DataType)
+            continue
+        end
+
+        params = sig_type.parameters
+        if length(params) < 3
+            continue
+        end
+        if params[3] !== target_type
+            continue
+        end
+
+        display_sig, display_location = split_method_display(sprint(show, method))
+        normalized_sig = normalize_kwcall_signature(display_sig, topic)
+        push!(kw_entries, (normalized_sig, display_location))
+    end
+
+    return kw_entries
+end
+
+"""
+Convert a `kwcall(::NamedTuple, ::typeof(f), args...)` display signature into
+`f(args...; kw...)` for user-facing method lists.
+"""
+function normalize_kwcall_signature(signature::String, topic::String)::String
+    m = match(
+        r"^kwcall\(::NamedTuple,\s*::typeof\([^)]*\)\s*(?:,\s*)?(.*)\)$",
+        signature,
+    )
+    if m === nothing
+        return signature
+    end
+
+    args = strip(m.captures[1])
+    if isempty(args)
+        return string(topic, "(; kw...)")
+    end
+    return string(topic, "(", args, "; kw...)")
 end
 
 """
@@ -824,7 +886,14 @@ function wrap_help_html(topic::String, content_html::String)::String
             return;
           }
 
-          if (text === href || text === decodeURI(href)) {
+          const normalizedText = text.replace(/\\s+/g, ' ').trim();
+          const normalizedHref = href.endsWith('/') ? href.slice(0, -1) : href;
+          if (
+            normalizedText === href ||
+            normalizedText === decodeURI(href) ||
+            normalizedText === normalizedHref ||
+            normalizedText === decodeURI(normalizedHref)
+          ) {
             anchor.textContent = shortenUrlLabel(href);
             anchor.title = href;
           }
@@ -858,7 +927,7 @@ function wrap_help_html(topic::String, content_html::String)::String
             continue;
           }
 
-          if (ch === '"' || ch === '\'') {
+          if (ch === '"' || ch === "'") {
             const quote = ch;
             let j = i + 1;
             while (j < line.length) {
@@ -918,7 +987,11 @@ function wrap_help_html(topic::String, content_html::String)::String
 
         const raw = code.textContent || '';
         const className = code.className || '';
-        if (className.includes('language-jldoctest')) {
+        if (
+          className.includes('language-jldoctest') ||
+          className.includes('language-julia-repl') ||
+          className.includes('language-juliarepl')
+        ) {
           const html = raw.split('\\n').map((line) => {
             if (line.startsWith('julia>')) {
               return '<span class="tok-prompt">julia&gt;</span>' + tokenizeJuliaLine(line.slice(6));
