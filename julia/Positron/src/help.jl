@@ -287,7 +287,7 @@ function render_methods_html(sym, topic::String)::Union{String,Nothing}
 
         print(io, "<li><code>", escape_html(sig), "</code>")
         if !isempty(location)
-            print(io, " in <code>", escape_html(location), "</code>")
+            print(io, render_method_location_html(location))
         end
         print(io, "</li>")
     end
@@ -310,6 +310,42 @@ function split_method_display(method_text::String)::Tuple{String,String}
         return (parts[1], parts[2])
     end
     return (method_text, "")
+end
+
+"""
+Parse method location strings of the form `<Module> <path>:<line>` and
+return `(module_name, file_name_with_line)`.
+"""
+function parse_method_location(location::String)::Union{Nothing,Tuple{String,String}}
+    m = match(r"^([^\s]+)\s+(.+):(\d+)$", strip(location))
+    if m === nothing
+        return nothing
+    end
+
+    module_name = m.captures[1]
+    file_path = replace(m.captures[2], "\\" => "/")
+    line = m.captures[3]
+    file_name = split(file_path, "/")[end]
+    return (module_name, string(file_name, ":", line))
+end
+
+"""
+Format method location HTML using Julia VS Code-like compact location text.
+"""
+function render_method_location_html(location::String)::String
+    parsed = parse_method_location(location)
+    if parsed === nothing
+        return string(" in <code>", escape_html(location), "</code>")
+    end
+
+    module_name, file_name_with_line = parsed
+    return string(
+        " in <code>",
+        escape_html(module_name),
+        "</code> at <code>",
+        escape_html(file_name_with_line),
+        "</code>",
+    )
 end
 
 """

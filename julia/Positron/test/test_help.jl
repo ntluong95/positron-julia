@@ -26,6 +26,21 @@ using JSON3
         @test stripped == "<p>Use <code>print</code> for output.</p>"
     end
 
+    @testset "Method Location Formatting" begin
+        parsed = Positron.parse_method_location(
+            "Plots ~/.julia/packages/Plots/GIume/src/plot.jl:107",
+        )
+        @test parsed == ("Plots", "plot.jl:107")
+
+        html = Positron.render_method_location_html(
+            "Plots ~/.julia/packages/Plots/GIume/src/plot.jl:107",
+        )
+        @test html == " in <code>Plots</code> at <code>plot.jl:107</code>"
+
+        fallback = Positron.render_method_location_html("unknown_location")
+        @test fallback == " in <code>unknown_location</code>"
+    end
+
     @testset "Symbol Resolution - Simple" begin
         # Built-in functions
         @test Positron.resolve_symbol("sum") === sum
