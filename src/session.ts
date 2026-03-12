@@ -326,6 +326,15 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		);
 	}
 
+	// Positron package API (PR #12372+): package pane calls this to obtain the manager.
+	getPackageManager(): JuliaPackageManager {
+		if (!this._kernel) {
+			throw new Error('Package manager is not available before the session starts');
+		}
+		return this._packageManager;
+	}
+
+	// Legacy per-method package API retained for compatibility with older Positron builds.
 	async getPackages(): Promise<JuliaLanguageRuntimePackage[]> {
 		return this._packageManager.getPackages();
 	}
