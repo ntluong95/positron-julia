@@ -486,6 +486,25 @@ function show_help!(service::HelpService, topic::String; focus::Bool = true)
 end
 
 """
+Extract the help topic from a REPL help-mode input (e.g. `?print`).
+Returns `nothing` when the code is not a help-mode request.
+"""
+function extract_help_topic_from_code(code::AbstractString)::Union{String,Nothing}
+    stripped = strip(String(code))
+    if !startswith(stripped, '?')
+        return nothing
+    end
+
+    topic = strip(stripped[2:end])
+    if isempty(topic)
+        return nothing
+    end
+
+    first_line = strip(first(split(topic, '\n', limit = 2)))
+    return isempty(first_line) ? nothing : first_line
+end
+
+"""
 Show help for a URL.
 """
 function show_help_url!(service::HelpService, url::String; focus::Bool = true)
