@@ -302,4 +302,14 @@ using JSON3
         # Note: This requires a running kernel, so we just test the function exists
         @test isdefined(Positron, :showhelp)
     end
+
+    @testset "REPL Help Input Parsing" begin
+        @test Positron.extract_help_topic_from_code("?print") == "print"
+        @test Positron.extract_help_topic_from_code("  ?Base.println  ") == "Base.println"
+        @test Positron.extract_help_topic_from_code("?\nprint") == "print"
+        @test Positron.extract_help_topic_from_code("?print;") == "print"
+        @test Positron.extract_help_topic_from_code("?;print;") == "print"
+        @test Positron.extract_help_topic_from_code("?") === nothing
+        @test Positron.extract_help_topic_from_code("print") === nothing
+    end
 end
