@@ -807,8 +807,9 @@ function install_execute_request_handler!()
             return original_execute_request(socket, ijulia_kernel, msg)
         end
 
-        local positron_kernel = get_kernel()
+        positron_kernel = get_kernel()
         if !positron_kernel.started || positron_kernel.help.comm === nothing
+            kernel_log_info("Falling back to default execute_request for help query because Help comm is unavailable")
             return original_execute_request(socket, ijulia_kernel, msg)
         end
 
@@ -844,7 +845,7 @@ function install_execute_request_handler!()
             end
 
             user_expressions = Dict{String,Any}()
-            for (v::String, ex::String) in msg.content["user_expressions"]
+            for (v::String, ex::String) in get(msg.content, "user_expressions", Dict{String,Any}())
                 try
                     value = include_string(ijulia_kernel.current_module, ex)
                     user_expressions[v] = Dict(

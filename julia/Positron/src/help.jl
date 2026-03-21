@@ -500,7 +500,8 @@ function extract_help_topic_from_code(code::AbstractString)::Union{String,Nothin
         return nothing
     end
 
-    first_line = strip(first(split(topic, '\n', limit = 2)))
+    newline_index = findfirst(==('\n'), topic)
+    first_line = strip(newline_index === nothing ? topic : topic[begin:prevind(topic, newline_index)])
     return isempty(first_line) ? nothing : first_line
 end
 
