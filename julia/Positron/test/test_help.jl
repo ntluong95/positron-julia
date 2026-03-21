@@ -307,6 +307,8 @@ using JSON3
         @test Positron.extract_help_topic_from_code("?print") == "print"
         @test Positron.extract_help_topic_from_code("  ?Base.println  ") == "Base.println"
         @test Positron.extract_help_topic_from_code("?\nprint") == "print"
+        @test Positron.extract_help_topic_from_code("?print;") == "print"
+        @test Positron.extract_help_topic_from_code("?;print;") == "print"
         @test Positron.extract_help_topic_from_code("?") === nothing
         @test Positron.extract_help_topic_from_code("print") === nothing
     end

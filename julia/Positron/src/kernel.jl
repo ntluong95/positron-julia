@@ -12,7 +12,6 @@ This module provides integration with IJulia to start and manage Positron servic
 using IJulia
 using Logging
 using Dates
-using REPL
 
 # Global log file handle
 const _log_file = Ref{Union{IOStream,Nothing}}(nothing)
@@ -832,7 +831,6 @@ function install_execute_request_handler!()
             )
         end
 
-        silent = silent || REPL.ends_with_semicolon(code)
         if store_history
             ijulia_kernel.In[ijulia_kernel.n] = code
         end
