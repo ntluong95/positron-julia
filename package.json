@@ -2,7 +2,7 @@
   "name": "positron-julia",
   "displayName": "Julia for Positron",
   "description": "Julia language support for Positron IDE",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "publisher": "ntluong95",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,
@@ -24,7 +24,8 @@
     "onLanguage:julia",
     "onCommand:julia.createNewFile",
     "onCommand:julia.selectInterpreter",
-    "onCommand:julia.sourceCurrentFile"
+    "onCommand:julia.runFile",
+    "onCommand:julia.runSelection"
   ],
   "contributes": {
     "languageRuntimes": [
@@ -101,6 +102,17 @@
         "command": "julia.selectInterpreter",
         "category": "Julia",
         "title": "Select Julia Interpreter"
+      },
+      {
+        "command": "julia.runFile",
+        "category": "Julia",
+        "title": "Run File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "julia.runSelection",
+        "category": "Julia",
+        "title": "Run Selection"
       }
     ],
     "configuration": {
@@ -149,6 +161,21 @@
           "command": "julia.createNewFile",
           "group": "file",
           "when": "!virtualWorkspace"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "when": "resourceExtname == .jl || editorLangId == julia",
+          "command": "julia.runFile",
+          "group": "navigation",
+          "order": 0,
+          "icon": "$(play)"
+        },
+        {
+          "when": "resourceExtname == .jl || editorLangId == julia",
+          "command": "julia.runSelection",
+          "group": "navigation",
+          "order": 2
         }
       ]
     },
