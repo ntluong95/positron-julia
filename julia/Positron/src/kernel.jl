@@ -147,6 +147,9 @@ function start_services!(kernel::PositronKernel = get_kernel())
     # Install custom kernel_info_request handler to provide REPL startup text
     install_kernel_info_handler!()
 
+    # Install custom history_request handler to provide persistent command history
+    install_history_handler!()
+
     # Install custom is_complete_request handler for proper multi-line code handling
     install_is_complete_handler!()
 
@@ -713,6 +716,149 @@ function install_kernel_info_handler!()
     end
 
     kernel_log_info("Installed custom kernel_info_request handler")
+end
+
+# -------------------------------------------------------------------------
+# Custom history_request handler
+# -------------------------------------------------------------------------
+
+"""
+Read Julia-mode entries from a REPL history file.
+"""
+function read_repl_history_entries(path::String)::Vector{String}
+    if isempty(path) || !isfile(path)
+        return String[]
+    end
+
+    entries = String[]
+
+    try
+        lines = readlines(path)
+        i = 1
+        while i <= length(lines)
+            line = lines[i]
+
+            # Skip blank separators between entries
+            if isempty(line)
+                i += 1
+                continue
+            end
+
+            mode = :julia
+            while i <= length(lines) && startswith(lines[i], '#')
+                metadata = lines[i]
+                if startswith(metadata, "# mode: ")
+                    mode = Symbol(SubString(metadata, 9))
+                end
+                i += 1
+            end
+
+            command_lines = String[]
+            while i <= length(lines) && startswith(lines[i], '\t')
+                push!(command_lines, SubString(lines[i], 2))
+                i += 1
+            end
+
+            if mode == :julia && !isempty(command_lines)
+                push!(entries, join(command_lines, '\n'))
+            end
+        end
+    catch e
+        kernel_log_warn("Failed to parse REPL history file '$path': $e")
+        return String[]
+    end
+
+    return entries
+end
+
+"""
+Collect command history from previous REPL sessions and the current kernel session.
+"""
+function collect_command_history(kernel)::Vector{Tuple{Int,String}}
+    entries = String[]
+
+    history_path = try
+        REPL.find_hist_file()
+    catch
+        ""
+    end
+    append!(entries, read_repl_history_entries(history_path))
+
+    for idx in sort(collect(keys(kernel.In)))
+        code = get(kernel.In, idx, nothing)
+        code isa String || continue
+        push!(entries, code)
+    end
+
+    indexed_entries = Tuple{Int,String}[]
+    for (idx, code) in enumerate(entries)
+        push!(indexed_entries, (idx, code))
+    end
+    return indexed_entries
+end
+
+"""
+Apply a Jupyter history request filter to indexed command history.
+"""
+function select_command_history(
+    indexed_entries::Vector{Tuple{Int,String}},
+    content::AbstractDict,
+)::Vector{Tuple{Int,String}}
+    access_type = get(content, "hist_access_type", "tail")
+
+    if access_type == "tail"
+        n = max(Int(get(content, "n", 1000)), 0)
+        start_idx = max(length(indexed_entries) - n + 1, 1)
+        return indexed_entries[start_idx:end]
+    elseif access_type == "range"
+        start_line = max(Int(get(content, "start", 1)), 1)
+        stop_line = Int(get(content, "stop", length(indexed_entries) + 1))
+        stop_line <= start_line && return Tuple{Int,String}[]
+
+        selected = Tuple{Int,String}[]
+        for (line, code) in indexed_entries
+            if line >= start_line && line < stop_line
+                push!(selected, (line, code))
+            end
+        end
+        return selected
+    elseif access_type == "search"
+        pattern = String(get(content, "pattern", ""))
+        if isempty(pattern)
+            return indexed_entries
+        end
+        selected = Tuple{Int,String}[]
+        for (line, code) in indexed_entries
+            occursin(pattern, code) && push!(selected, (line, code))
+        end
+        return selected
+    end
+
+    return indexed_entries
+end
+
+"""
+Install our custom history_request handler in IJulia.
+"""
+function install_history_handler!()
+    if !isdefined(IJulia, :handlers)
+        kernel_log_warn("IJulia.handlers not found, cannot install custom history handler")
+        return
+    end
+
+    IJulia.handlers["history_request"] = function (socket, kernel, msg)
+        indexed_entries = collect_command_history(kernel)
+        selected_entries = select_command_history(indexed_entries, msg.content)
+        payload = Any[Any[0, line, code] for (line, code) in selected_entries]
+
+        IJulia.send_ipython(
+            kernel.requests[],
+            kernel,
+            IJulia.msg_reply(msg, "history_reply", Dict("history" => payload)),
+        )
+    end
+
+    kernel_log_info("Installed custom history_request handler")
 end
 
 # -------------------------------------------------------------------------
