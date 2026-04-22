@@ -23,6 +23,8 @@ export interface JuliaLanguageRuntimePackage {
 	name: string;
 	displayName: string;
 	version: string;
+	description?: string;
+	author?: string;
 }
 
 interface JuliaPackageSession {
@@ -166,11 +168,15 @@ export class JuliaPackageManager {
 				const record = item as Record<string, unknown>;
 				const name = typeof record.name === 'string' ? record.name : '';
 				const version = typeof record.version === 'string' ? record.version : '';
+				const description = typeof record.description === 'string' ? record.description : '';
+				const author = typeof record.author === 'string' ? record.author : '';
 				return {
 					id: typeof record.id === 'string' ? record.id : `${name}-${version}`,
 					name,
 					displayName: typeof record.displayName === 'string' ? record.displayName : name,
 					version,
+					...(description.length > 0 ? { description } : {}),
+					...(author.length > 0 ? { author } : {}),
 				};
 			})
 			.filter((pkg) => pkg.name.length > 0);
