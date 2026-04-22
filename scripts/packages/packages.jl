@@ -19,14 +19,18 @@ function _positron_print_json_string_array(values::Vector{String})
     print("]")
 end
 
+function _positron_normalize_whitespace(value::AbstractString)::String
+    return strip(replace(String(value), r"\s+" => " "))
+end
+
 function _positron_normalize_package_description(value)::String
     value isa AbstractString || return ""
-    return strip(replace(String(value), r"\s+" => " "))
+    return _positron_normalize_whitespace(value)
 end
 
 function _positron_normalize_package_author(value)::String
     value isa AbstractString || return ""
-    author = strip(replace(String(value), r"\s+" => " "))
+    author = _positron_normalize_whitespace(value)
     return strip(replace(author, r"\s*<[^>]+>" => ""))
 end
 
