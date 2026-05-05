@@ -121,7 +121,8 @@
         "positron.julia.executablePath": {
           "type": "string",
           "default": "",
-          "description": "Path to the Julia executable"
+          "markdownDescription": "Path to the Julia executable, or a juliaup channel name (e.g. `1.10`, `lts`, `release`). When set in workspace settings (`.vscode/settings.json`), this pins the project to a specific Julia version. Leave empty to use the system default.",
+          "scope": "window"
         },
         "julia.lint.missingrefs": {
           "type": "string",

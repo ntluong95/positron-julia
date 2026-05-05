@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as semver from 'semver';
 import { spawn } from 'child_process';
+import * as vscode from 'vscode';
 
 import { LOGGER } from './extension';
 import {
@@ -128,6 +129,10 @@ export async function* juliaRuntimeDiscoverer(): AsyncGenerator<JuliaInstallatio
 		}
 	};
 
+	// 0. Check user-configured executable path (highest priority, workspace-specific)
+	LOGGER.debug('Checking for configured Julia executable path...');
+	yield* yieldIfNew(await discoverFromConfiguredPath());
+
 	// 1. Check PATH
 	LOGGER.debug('Searching for Julia in PATH...');
 	yield* yieldIfNew(await discoverFromPath());
@@ -142,6 +147,68 @@ export async function* juliaRuntimeDiscoverer(): AsyncGenerator<JuliaInstallatio
 	LOGGER.debug('Searching for Julia in standard locations...');
 	for await (const installation of discoverFromStandardLocations()) {
 		yield* yieldIfNew(installation);
+	}
+}
+
+/**
+ * Discovers Julia from the user-configured executable path or juliaup channel.
+ * Reads `positron.julia.executablePath` from workspace settings, giving project-specific
+ * control over which Julia version is used. The value can be either an absolute path to
+ * a Julia executable or a juliaup channel name (e.g. "1.10", "lts", "release").
+ */
+async function discoverFromConfiguredPath(): Promise<JuliaInstallation | undefined> {
+	const config = vscode.workspace.getConfiguration('positron.julia');
+	const configuredPath = config.get<string>('executablePath', '').trim();
+	if (!configuredPath) {
+		return undefined;
+	}
+
+	LOGGER.info(`Julia: using configured executable path: ${configuredPath}`);
+
+	// If it looks like a path (absolute or contains a separator) treat it as a binary path.
+	const looksLikePath =
+		path.isAbsolute(configuredPath) ||
+		configuredPath.includes('/') ||
+		configuredPath.includes('\\');
+
+	if (looksLikePath) {
+		if (!fs.existsSync(configuredPath)) {
+			LOGGER.warn(`Configured Julia executable not found: ${configuredPath}`);
+			return undefined;
+		}
+		return createJuliaInstallation(configuredPath, ReasonDiscovered.USER_SETTING, true);
+	}
+
+	// Otherwise treat it as a juliaup channel name (e.g. "1.10", "lts", "release").
+	try {
+		const juliaupPath = await resolveCommandPath('juliaup');
+		if (!juliaupPath) {
+			LOGGER.warn(
+				`positron.julia.executablePath is set to "${configuredPath}" ` +
+				`but juliaup was not found in PATH. ` +
+				`Set the value to an absolute path or install juliaup.`
+			);
+			return undefined;
+		}
+
+		const result = await runCommand(juliaupPath, ['which', configuredPath], { timeout: COMMAND_TIMEOUT_MS });
+		if (result.timedOut) {
+			LOGGER.warn(`Timed out resolving juliaup channel "${configuredPath}"`);
+			return undefined;
+		}
+		if (result.exitCode !== 0 || !result.stdout.trim()) {
+			LOGGER.warn(
+				`juliaup channel "${configuredPath}" is not installed. ` +
+				`Run: juliaup add ${configuredPath}`
+			);
+			return undefined;
+		}
+
+		const binpath = result.stdout.trim();
+		return createJuliaInstallation(binpath, ReasonDiscovered.USER_SETTING, true);
+	} catch (error) {
+		LOGGER.debug(`Failed to resolve juliaup channel "${configuredPath}": ${error}`);
+		return undefined;
 	}
 }
 
