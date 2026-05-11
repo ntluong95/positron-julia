@@ -23,6 +23,12 @@ export interface JuliaLanguageRuntimePackage {
 	name: string;
 	displayName: string;
 	version: string;
+	description?: string;
+	license?: string;
+	latestVersion?: string;
+	publishedDate?: string;
+	availableVersions?: string[];
+	attached?: boolean;
 }
 
 interface JuliaPackageSession {
@@ -41,6 +47,8 @@ export class JuliaPackageManager {
 	private readonly _scriptPath: string;
 	private _scriptSourced = false;
 	private _scriptSourcing: Promise<void> | undefined;
+	private readonly _metadataCache = new Map<string, Partial<JuliaLanguageRuntimePackage>>();
+	private readonly _metadataInFlight = new Map<string, Promise<Map<string, Partial<JuliaLanguageRuntimePackage>>>>();
 
 	constructor(session: JuliaPackageSession, extensionPath: string) {
 		this._session = session;
@@ -49,6 +57,8 @@ export class JuliaPackageManager {
 
 	async onRuntimeReady(): Promise<void> {
 		this._scriptSourced = false;
+		this._metadataCache.clear();
+		this._metadataInFlight.clear();
 		await this.sourcePackagesScript();
 	}
 
@@ -81,13 +91,13 @@ export class JuliaPackageManager {
 		return this._scriptSourcing;
 	}
 
-	async getPackages(): Promise<JuliaLanguageRuntimePackage[]> {
+	async getPackages(_token?: vscode.CancellationToken): Promise<JuliaLanguageRuntimePackage[]> {
 		await this.sourcePackagesScript();
 		const raw = await this._executeAndCapture('_positron_list_packages()', positron.RuntimeCodeExecutionMode.Silent, QUERY_TIMEOUT_MS);
 		return this._parsePackages(raw);
 	}
 
-	async installPackages(packages: JuliaPackageSpec[]): Promise<void> {
+	async installPackages(packages: JuliaPackageSpec[], _token?: vscode.CancellationToken): Promise<void> {
 		await this.sourcePackagesScript();
 		const specs = packages
 			.filter((pkg) => pkg?.name && pkg.name.trim().length > 0)
@@ -102,7 +112,7 @@ export class JuliaPackageManager {
 		await this._executeAndWait(code, MUTATION_TIMEOUT_MS);
 	}
 
-	async uninstallPackages(packageNames: string[]): Promise<void> {
+	async uninstallPackages(packageNames: string[], _token?: vscode.CancellationToken): Promise<void> {
 		await this.sourcePackagesScript();
 		const names = packageNames.map((name) => name.trim()).filter((name) => name.length > 0);
 		if (names.length === 0) {
@@ -114,7 +124,7 @@ export class JuliaPackageManager {
 		);
 	}
 
-	async updatePackages(packages: JuliaPackageSpec[]): Promise<void> {
+	async updatePackages(packages: JuliaPackageSpec[], _token?: vscode.CancellationToken): Promise<void> {
 		await this.sourcePackagesScript();
 		const names = packages
 			.filter((pkg) => pkg?.name && pkg.name.trim().length > 0)
@@ -128,12 +138,12 @@ export class JuliaPackageManager {
 		);
 	}
 
-	async updateAllPackages(): Promise<void> {
+	async updateAllPackages(_token?: vscode.CancellationToken): Promise<void> {
 		await this.sourcePackagesScript();
 		await this._executeAndWait('_positron_update_all_packages()', MUTATION_TIMEOUT_MS);
 	}
 
-	async searchPackages(query: string): Promise<JuliaLanguageRuntimePackage[]> {
+	async searchPackages(query: string, _token?: vscode.CancellationToken): Promise<JuliaLanguageRuntimePackage[]> {
 		await this.sourcePackagesScript();
 		const escaped = this._escapeJuliaStringLiteral(query);
 		const raw = await this._executeAndCapture(
@@ -144,7 +154,7 @@ export class JuliaPackageManager {
 		return this._parsePackages(raw);
 	}
 
-	async searchPackageVersions(name: string): Promise<string[]> {
+	async searchPackageVersions(name: string, _token?: vscode.CancellationToken): Promise<string[]> {
 		await this.sourcePackagesScript();
 		const escaped = this._escapeJuliaStringLiteral(name);
 		const raw = await this._executeAndCapture(
@@ -153,6 +163,35 @@ export class JuliaPackageManager {
 			QUERY_TIMEOUT_MS
 		);
 		return this._parseStringArray(raw);
+	}
+
+	async getPackageMetadata(
+		packageNames: string[],
+		_token?: vscode.CancellationToken,
+	): Promise<Map<string, Partial<JuliaLanguageRuntimePackage>>> {
+		const normalizedNames = [...new Set(
+			packageNames
+				.filter((name): name is string => typeof name === 'string')
+				.map((name) => name.trim().toLowerCase())
+				.filter((name) => name.length > 0)
+		)];
+		if (normalizedNames.length === 0) {
+			return new Map();
+		}
+
+		const missingNames = normalizedNames.filter((name) => !this._metadataCache.has(name));
+		if (missingNames.length > 0) {
+			await this._fetchAndCacheMetadata(missingNames);
+		}
+
+		const result = new Map<string, Partial<JuliaLanguageRuntimePackage>>();
+		for (const name of normalizedNames) {
+			const metadata = this._metadataCache.get(name);
+			if (metadata) {
+				result.set(name, metadata);
+			}
+		}
+		return result;
 	}
 
 	private _parsePackages(raw: string): JuliaLanguageRuntimePackage[] {
@@ -171,9 +210,77 @@ export class JuliaPackageManager {
 					name,
 					displayName: typeof record.displayName === 'string' ? record.displayName : name,
 					version,
+					description: typeof record.description === 'string' ? record.description : undefined,
+					license: typeof record.license === 'string' ? record.license : undefined,
+					latestVersion: typeof record.latestVersion === 'string' ? record.latestVersion : undefined,
+					publishedDate: typeof record.publishedDate === 'string' ? record.publishedDate : undefined,
+					availableVersions: this._asStringArray(record.availableVersions),
+					attached: typeof record.attached === 'boolean' ? record.attached : undefined,
 				};
 			})
 			.filter((pkg) => pkg.name.length > 0);
+	}
+
+	private _parsePackageMetadataMap(raw: string): Map<string, Partial<JuliaLanguageRuntimePackage>> {
+		const parsed = this._parseJsonValue(raw);
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+			return new Map();
+		}
+
+		const metadataByName = new Map<string, Partial<JuliaLanguageRuntimePackage>>();
+		for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+			if (typeof key !== 'string' || key.length === 0) {
+				continue;
+			}
+			if (!value || typeof value !== 'object' || Array.isArray(value)) {
+				continue;
+			}
+			const record = value as Record<string, unknown>;
+			metadataByName.set(key.toLowerCase(), {
+				description: typeof record.description === 'string' ? record.description : undefined,
+				license: typeof record.license === 'string' ? record.license : undefined,
+				latestVersion: typeof record.latestVersion === 'string' ? record.latestVersion : undefined,
+				publishedDate: typeof record.publishedDate === 'string' ? record.publishedDate : undefined,
+				availableVersions: this._asStringArray(record.availableVersions),
+			});
+		}
+
+		return metadataByName;
+	}
+
+	private _asStringArray(value: unknown): string[] | undefined {
+		if (!Array.isArray(value)) {
+			return undefined;
+		}
+		const parsed = value.filter((item): item is string => typeof item === 'string');
+		return parsed.length > 0 ? parsed : undefined;
+	}
+
+	private async _fetchAndCacheMetadata(packageNames: string[]): Promise<void> {
+		const key = packageNames.slice().sort().join('\u0000');
+		let inFlight = this._metadataInFlight.get(key);
+		if (!inFlight) {
+			inFlight = this._fetchMetadata(packageNames).finally(() => {
+				this._metadataInFlight.delete(key);
+			});
+			this._metadataInFlight.set(key, inFlight);
+		}
+
+		const metadataByName = await inFlight;
+		for (const name of packageNames) {
+			const metadata = metadataByName.get(name);
+			this._metadataCache.set(name, metadata ?? {});
+		}
+	}
+
+	private async _fetchMetadata(packageNames: string[]): Promise<Map<string, Partial<JuliaLanguageRuntimePackage>>> {
+		await this.sourcePackagesScript();
+		const raw = await this._executeAndCapture(
+			`_positron_get_package_metadata(${this._toJuliaStringVector(packageNames)})`,
+			positron.RuntimeCodeExecutionMode.Silent,
+			QUERY_TIMEOUT_MS
+		);
+		return this._parsePackageMetadataMap(raw);
 	}
 
 	private _parseStringArray(raw: string): string[] {

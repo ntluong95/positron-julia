@@ -363,6 +363,13 @@ export class JuliaSession implements positron.LanguageRuntimeSession, vscode.Dis
 		return this._packageManager.searchPackageVersions(name);
 	}
 
+	async getPackageMetadata(
+		packageNames: string[],
+		token?: vscode.CancellationToken
+	): Promise<Map<string, Partial<JuliaLanguageRuntimePackage>>> {
+		return this._packageManager.getPackageMetadata(packageNames, token);
+	}
+
 	updateSessionName(name: string): void {
 		this.dynState.sessionName = name;
 	}
