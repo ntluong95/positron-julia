@@ -109,7 +109,7 @@ function _positron_list_packages(direct_only::Bool=true)
             continue
         end
         name = package_info.name
-        version = isnothing(package_info.version) ? "" : string(package_info.version)
+        version = string(package_info.version)
         push!(packages, (
             id = "$(name)-$(version)",
             name = name,
@@ -203,7 +203,7 @@ function _positron_search_packages(query::String)
             name = name,
             displayName = name,
             version = version,
-            attached = false,
+            attached = _positron_is_package_attached(name),
         ))
     end
     sort!(packages, by = package -> lowercase(package.name))
@@ -277,13 +277,18 @@ function _positron_installed_package_metadata(name::String)::Tuple{Union{Nothing
         return nothing, nothing
     end
 
-    description = get(project_data, "description", nothing)
-    license = get(project_data, "license", nothing)
-
-    description = description isa String && !isempty(strip(description)) ? description : nothing
-    license = license isa String && !isempty(strip(license)) ? license : nothing
+    description = _positron_optional_nonempty_string(get(project_data, "description", nothing))
+    license = _positron_optional_nonempty_string(get(project_data, "license", nothing))
 
     return description, license
+end
+
+function _positron_optional_nonempty_string(value)::Union{Nothing, String}
+    return value isa String && !isempty(strip(value)) ? value : nothing
+end
+
+function _positron_add_if_present!(entry::Dict{String, Any}, key::String, value)
+    isnothing(value) || (entry[key] = value)
 end
 
 function _positron_registry_metadata(name::String)::Tuple{Union{Nothing, String}, Union{Nothing, Vector{String}}}
@@ -325,12 +330,12 @@ function _positron_get_package_metadata(package_names::Vector{String})
         entry = Dict{String, Any}()
 
         description, license = _positron_installed_package_metadata(package_name)
-        !isnothing(description) && (entry["description"] = description)
-        !isnothing(license) && (entry["license"] = license)
+        _positron_add_if_present!(entry, "description", description)
+        _positron_add_if_present!(entry, "license", license)
 
         latest_version, available_versions = _positron_registry_metadata(package_name)
-        !isnothing(latest_version) && (entry["latestVersion"] = latest_version)
-        !isnothing(available_versions) && (entry["availableVersions"] = available_versions)
+        _positron_add_if_present!(entry, "latestVersion", latest_version)
+        _positron_add_if_present!(entry, "availableVersions", available_versions)
 
         metadata[key] = entry
     end

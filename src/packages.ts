@@ -48,6 +48,7 @@ export class JuliaPackageManager {
 	private _scriptSourced = false;
 	private _scriptSourcing: Promise<void> | undefined;
 	private readonly _metadataCache = new Map<string, Partial<JuliaLanguageRuntimePackage>>();
+	private readonly _missingMetadata = new Set<string>();
 	private readonly _metadataInFlight = new Map<string, Promise<Map<string, Partial<JuliaLanguageRuntimePackage>>>>();
 
 	constructor(session: JuliaPackageSession, extensionPath: string) {
@@ -58,6 +59,7 @@ export class JuliaPackageManager {
 	async onRuntimeReady(): Promise<void> {
 		this._scriptSourced = false;
 		this._metadataCache.clear();
+		this._missingMetadata.clear();
 		this._metadataInFlight.clear();
 		await this.sourcePackagesScript();
 	}
@@ -171,7 +173,6 @@ export class JuliaPackageManager {
 	): Promise<Map<string, Partial<JuliaLanguageRuntimePackage>>> {
 		const normalizedNames = [...new Set(
 			packageNames
-				.filter((name): name is string => typeof name === 'string')
 				.map((name) => name.trim().toLowerCase())
 				.filter((name) => name.length > 0)
 		)];
@@ -179,15 +180,18 @@ export class JuliaPackageManager {
 			return new Map();
 		}
 
-		const missingNames = normalizedNames.filter((name) => !this._metadataCache.has(name));
+		const missingNames = normalizedNames.filter((name) => !this._metadataCache.has(name) && !this._missingMetadata.has(name));
 		if (missingNames.length > 0) {
 			await this._fetchAndCacheMetadata(missingNames);
 		}
 
 		const result = new Map<string, Partial<JuliaLanguageRuntimePackage>>();
 		for (const name of normalizedNames) {
+			if (this._missingMetadata.has(name)) {
+				continue;
+			}
 			const metadata = this._metadataCache.get(name);
-			if (metadata) {
+			if (metadata !== undefined) {
 				result.set(name, metadata);
 			}
 		}
@@ -257,7 +261,7 @@ export class JuliaPackageManager {
 	}
 
 	private async _fetchAndCacheMetadata(packageNames: string[]): Promise<void> {
-		const key = packageNames.slice().sort().join('\u0000');
+		const key = JSON.stringify(packageNames.slice().sort());
 		let inFlight = this._metadataInFlight.get(key);
 		if (!inFlight) {
 			inFlight = this._fetchMetadata(packageNames).finally(() => {
@@ -269,7 +273,12 @@ export class JuliaPackageManager {
 		const metadataByName = await inFlight;
 		for (const name of packageNames) {
 			const metadata = metadataByName.get(name);
-			this._metadataCache.set(name, metadata ?? {});
+			if (metadata) {
+				this._metadataCache.set(name, metadata);
+				this._missingMetadata.delete(name);
+			} else {
+				this._missingMetadata.add(name);
+			}
 		}
 	}
 
