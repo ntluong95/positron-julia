@@ -2,7 +2,7 @@
   "name": "positron-julia",
   "displayName": "Julia for Positron",
   "description": "Julia language support for Positron IDE",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ntluong95",
   "license": "SEE LICENSE IN LICENSE",
   "private": false,
@@ -25,7 +25,8 @@
     "onCommand:julia.createNewFile",
     "onCommand:julia.selectInterpreter",
     "onCommand:julia.runFile",
-    "onCommand:julia.runSelection"
+    "onCommand:julia.runSelection",
+    "onCommand:julia.toggleOutline"
   ],
   "contributes": {
     "languageRuntimes": [
@@ -113,6 +114,17 @@
         "command": "julia.runSelection",
         "category": "Julia",
         "title": "Run Selection"
+      },
+      {
+        "command": "julia.toggleOutline",
+        "category": "Julia",
+        "title": "Toggle Outline",
+        "when": "editorLangId == julia",
+        "icon": "$(list-unordered)",
+        "actionBarOptions": {
+          "controlType": "button",
+          "displayTitle": false
+        }
       }
     ],
     "configuration": {
@@ -177,6 +189,13 @@
           "command": "julia.runSelection",
           "group": "navigation",
           "order": 2
+        }
+      ],
+      "editor/actions/left": [
+        {
+          "when": "resourceExtname == .jl || editorLangId == julia",
+          "command": "julia.toggleOutline",
+          "group": "navigation@45"
         }
       ]
     },
