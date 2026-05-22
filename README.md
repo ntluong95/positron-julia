@@ -4,6 +4,7 @@ Julia language support for [Positron](https://github.com/posit-dev/positron). Th
 
 > [!IMPORTANT]
 > From version 0.1.3, the extension will be maintained under [TidierOrg](https://github.com/TidierOrg).
+> You can access new repo at [TidierOrg/positron-julia](https://github.com/TidierOrg/positron-julia).
 
 <p align="center">
   <img src="resources/branding/julia-logo.png" alt="Julia Logo" width="240">
