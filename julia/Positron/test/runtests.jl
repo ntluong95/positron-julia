@@ -33,6 +33,7 @@ include("test_helpers.jl")
 
     @testset "Kernel Functionality" begin
         include("test_kernel.jl")
+        include("test_history.jl")
     end
 
     @testset "UI Service" begin
