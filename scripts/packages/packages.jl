@@ -4,6 +4,7 @@
 # ---------------------------------------------------------------------------------------------
 
 import Pkg
+import TOML
 
 function _positron_json_string(value::AbstractString)::String
     return "\"" * escape_string(value) * "\""
@@ -18,7 +19,50 @@ function _positron_print_json_string_array(values::Vector{String})
     print("]")
 end
 
-function _positron_print_json_packages(packages::Vector{NamedTuple{(:id, :name, :displayName, :version), NTuple{4, String}}})
+function _positron_normalize_whitespace(value::AbstractString)::String
+    return strip(replace(String(value), r"\s+" => " "))
+end
+
+function _positron_normalize_package_description(value)::String
+    value isa AbstractString || return ""
+    return _positron_normalize_whitespace(value)
+end
+
+function _positron_normalize_package_author(value)::String
+    value isa AbstractString || return ""
+    author = _positron_normalize_whitespace(value)
+    return strip(replace(author, r"\s*<[^>]+>" => ""))
+end
+
+function _positron_package_metadata_from_source(source)::NamedTuple{(:description, :author), NTuple{2, String}}
+    source isa AbstractString || return (description = "", author = "")
+
+    project_toml_path = joinpath(source, "Project.toml")
+    isfile(project_toml_path) || return (description = "", author = "")
+
+    project_toml = try
+        TOML.parsefile(project_toml_path)
+    catch
+        return (description = "", author = "")
+    end
+
+    description = _positron_normalize_package_description(get(project_toml, "description", ""))
+    author = ""
+    authors = get(project_toml, "authors", nothing)
+
+    if authors isa AbstractVector
+        for entry in authors
+            author = _positron_normalize_package_author(entry)
+            isempty(author) || break
+        end
+    else
+        author = _positron_normalize_package_author(authors)
+    end
+
+    return (description = description, author = author)
+end
+
+function _positron_print_json_packages(packages::Vector{NamedTuple{(:id, :name, :displayName, :version, :description, :author), NTuple{6, String}}})
     print("[")
     for (index, package) in pairs(packages)
         index > 1 && print(",")
@@ -26,25 +70,30 @@ function _positron_print_json_packages(packages::Vector{NamedTuple{(:id, :name, 
         print("\"id\":", _positron_json_string(package.id), ",")
         print("\"name\":", _positron_json_string(package.name), ",")
         print("\"displayName\":", _positron_json_string(package.displayName), ",")
-        print("\"version\":", _positron_json_string(package.version))
+        print("\"version\":", _positron_json_string(package.version), ",")
+        print("\"description\":", _positron_json_string(package.description), ",")
+        print("\"author\":", _positron_json_string(package.author))
         print("}")
     end
     print("]")
 end
 
 function _positron_list_packages(direct_only::Bool=true)
-    packages = NamedTuple{(:id, :name, :displayName, :version), NTuple{4, String}}[]
+    packages = NamedTuple{(:id, :name, :displayName, :version, :description, :author), NTuple{6, String}}[]
     for package_info in values(Pkg.dependencies())
         if direct_only && !package_info.is_direct_dep
             continue
         end
         name = package_info.name
         version = string(package_info.version)
+        metadata = _positron_package_metadata_from_source(package_info.source)
         push!(packages, (
             id = "$(name)-$(version)",
             name = name,
             displayName = name,
             version = version,
+            description = metadata.description,
+            author = metadata.author,
         ))
     end
     sort!(packages, by = package -> lowercase(package.name))
@@ -93,7 +142,7 @@ end
 function _positron_search_packages(query::String)
     query = lowercase(strip(query))
     if isempty(query)
-        _positron_print_json_packages(NamedTuple{(:id, :name, :displayName, :version), NTuple{4, String}}[])
+        _positron_print_json_packages(NamedTuple{(:id, :name, :displayName, :version, :description, :author), NTuple{6, String}}[])
         return
     end
 
@@ -125,13 +174,15 @@ function _positron_search_packages(query::String)
         end
     end
 
-    packages = NamedTuple{(:id, :name, :displayName, :version), NTuple{4, String}}[]
+    packages = NamedTuple{(:id, :name, :displayName, :version, :description, :author), NTuple{6, String}}[]
     for (name, version) in by_name
         push!(packages, (
             id = "$(name)-$(version)",
             name = name,
             displayName = name,
             version = version,
+            description = "",
+            author = "",
         ))
     end
     sort!(packages, by = package -> lowercase(package.name))

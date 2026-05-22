@@ -52,6 +52,10 @@ include("test_helpers.jl")
         include("test_help.jl")
     end
 
+    @testset "Packages Script" begin
+        include("test_packages_script.jl")
+    end
+
     @testset "Plots System" begin
         include("test_plots.jl")
     end
