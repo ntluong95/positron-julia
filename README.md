@@ -2,6 +2,9 @@
 
 Julia language support for [Positron](https://github.com/posit-dev/positron). The project is a fork of a [PR](https://github.com/posit-dev/positron/pull/11108) made by @wesm
 
+> [!IMPORTANT]
+> From version 0.1.3, the extension will be maintained under [TidierOrg](https://github.com/TidierOrg).
+
 <p align="center">
   <img src="resources/branding/julia-logo.png" alt="Julia Logo" width="240">
 </p>
